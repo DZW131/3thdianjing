@@ -119,7 +119,13 @@ class Trainer(object):
         self.model = model
         self.optimizer = optimizer
         self.evaluator = Evaluator(self.nclass)
-        self.scheduler = LR_Scheduler(args.lr_scheduler, args.lr, args.epochs, len(self.train_loader))
+        self.scheduler = LR_Scheduler(
+            args.lr_scheduler,
+            args.lr,
+            args.epochs,
+            len(self.train_loader),
+            verbose=False,
+        )
 
         if args.cuda:
             self.model = torch.nn.DataParallel(self.model, device_ids=self.args.gpu_ids)
