@@ -1,0 +1,1 @@
+python train.py --dataset jijie --backbone resnet --workers 4 --epochs 150 --batch-size 8 --gpu-ids 0 --checkname jijie_resnet_pad512 --lr 0.007 --crop-size 512 --resize-mode pad --split-profile annotated --eval-interval 1

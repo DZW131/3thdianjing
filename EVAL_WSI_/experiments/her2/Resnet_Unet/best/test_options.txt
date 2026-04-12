@@ -1,0 +1,38 @@
+# ------------------------- Options ------------------------- #
+             dataset: her2                               
+             isTrain: False                              
+
+*************** model ***************
+                name: Resnet_Unet                        
+              C_name: Resnet_Unet                        
+              R_name: Unet                               
+                in_c: 3                                  
+               out_c: 10                                 
+            n_layers: 4                                  
+         growth_rate: 24                                 
+           drop_rate: 0.1                                
+      compress_ratio: 0.5                                
+           dilations: [1, 2, 4, 8, 16, 4, 1]             
+           is_hybrid: True                               
+          layer_type: basic                              
+
+*************** transform ***************
+test:
+
+*************** test ***************
+               epoch: best                               
+                 gpu: [0]                                
+             img_dir: val/iamges                         
+           label_dir: val/labels                         
+                 tta: True                               
+           save_flag: True                               
+          patch_size: 208                                
+             overlap: 80                                 
+            save_dir: ./experiments/her2/Resnet_Unet/best
+          model_path: experiments/her2/Resnet_Unet/checkpoints/checkpoint_best.pth.tar
+        WSI_save_dir: /media/deepin/DeepInformatic_dataset/lihansheng/HER2/0503/patches/
+
+*************** post ***************
+            min_area: 20                                 
+              radius: 2                                  
+# -------------------------- End -------------------------- #

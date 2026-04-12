@@ -1,0 +1,96 @@
+{
+  "input_root": "F:\\fenge_datasets",
+  "output_root": "F:\\fenge\\data\\jijie",
+  "scan_summary": {
+    "scanned_total": 444,
+    "canonical_total": 422,
+    "usable_total": 391,
+    "annotated_total": 243,
+    "zero_mark_total": 148,
+    "template_only_total": 31,
+    "invalid_total": 2,
+    "duplicates_removed": 20,
+    "group_count": 37
+  },
+  "split_summary_all_usable": {
+    "train": {
+      "total": 235,
+      "annotated": 107,
+      "zero_mark_candidates": 128,
+      "classes_present": [
+        "严重损伤线粒体",
+        "中度损伤线粒体",
+        "健康线粒体",
+        "自噬线粒体",
+        "肌浆网",
+        "闰盘",
+        "Z线样物质堆积",
+        "脂滴",
+        "糖原颗粒",
+        "Z线",
+        "T管",
+        "M线",
+        "心肌侧管"
+      ]
+    },
+    "val": {
+      "total": 81,
+      "annotated": 67,
+      "zero_mark_candidates": 14,
+      "classes_present": [
+        "严重损伤线粒体",
+        "中度损伤线粒体",
+        "健康线粒体",
+        "自噬线粒体",
+        "肌浆网",
+        "闰盘",
+        "Z线样物质堆积",
+        "脂滴",
+        "Z线",
+        "T管",
+        "M线",
+        "心肌侧管"
+      ]
+    },
+    "test": {
+      "total": 75,
+      "annotated": 69,
+      "zero_mark_candidates": 6,
+      "classes_present": [
+        "严重损伤线粒体",
+        "中度损伤线粒体",
+        "健康线粒体",
+        "自噬线粒体",
+        "肌浆网",
+        "闰盘",
+        "Z线样物质堆积",
+        "脂滴",
+        "Z线",
+        "T管",
+        "M线",
+        "心肌侧管"
+      ]
+    }
+  },
+  "default_training_split_summary": {
+    "train": 107,
+    "val": 67,
+    "test": 69
+  },
+  "class_names": [
+    "Background",
+    "严重损伤线粒体",
+    "中度损伤线粒体",
+    "健康线粒体",
+    "自噬线粒体",
+    "肌浆网",
+    "闰盘",
+    "Z线样物质堆积",
+    "脂滴",
+    "糖原颗粒",
+    "Z线",
+    "T管",
+    "M线",
+    "心肌侧管"
+  ]
+}

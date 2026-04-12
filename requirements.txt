@@ -1,0 +1,10 @@
+# Install torch and torchvision separately with the wheel that matches your CUDA version.
+# Example: follow https://pytorch.org/get-started/locally/ and then run:
+#   pip install -r requirements.txt
+
+numpy>=1.24,<3.0
+tqdm>=4.66,<5.0
+Pillow>=10.0,<12.0
+matplotlib>=3.8,<4.0
+seaborn>=0.13,<1.0
+tensorboard>=2.16,<3.0
