@@ -108,9 +108,8 @@ def make_data_loader(args, **kwargs):
         try:
             test_set = jijie.JijieSegmentation(args, split="test")
             test_loader = _build_loader(test_set, eval_batch_size, False, **kwargs)
-            print("Loaded jijie test split.")
         except FileNotFoundError:
-            print("jijie test split was not found. Evaluation will fall back to the validation split.")
+            print("[Data] jijie test split not found; evaluation will fall back to the validation split.")
 
         num_class = train_set.NUM_CLASSES
         train_loader = _build_loader(train_set, args.batch_size, True, **kwargs)

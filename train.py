@@ -1,6 +1,8 @@
 import argparse
 import os
 import random
+import sys
+import time
 
 import numpy as np
 import torch
@@ -23,6 +25,34 @@ JIJIE_DEFAULT_EPOCHS = 150
 JIJIE_DEFAULT_LR = 0.007
 
 
+def format_duration(seconds):
+    total_seconds = int(round(seconds))
+    minutes, seconds = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+
+    if hours:
+        return "{:d}h{:02d}m{:02d}s".format(hours, minutes, seconds)
+    if minutes:
+        return "{:d}m{:02d}s".format(minutes, seconds)
+    return "{:d}s".format(seconds)
+
+
+def format_top_class_metrics(metric_values, max_items=5):
+    ranked_metrics = [
+        (class_id, float(value))
+        for class_id, value in enumerate(metric_values)
+        if value > 0
+    ]
+    if not ranked_metrics:
+        return "none"
+
+    ranked_metrics.sort(key=lambda item: item[1], reverse=True)
+    return ", ".join(
+        "c{}={:.4f}".format(class_id, value)
+        for class_id, value in ranked_metrics[:max_items]
+    )
+
+
 def parse_selected_classes(raw_value):
     if raw_value in (None, ""):
         return None
@@ -43,6 +73,7 @@ def parse_selected_classes(raw_value):
 class Trainer(object):
     def __init__(self, args):
         self.args = args
+        self.show_progress = sys.stdout.isatty() and not args.no_progress
 
         self.saver = Saver(args)
         self.saver.save_experiment_config()
@@ -108,17 +139,62 @@ class Trainer(object):
             )
             args.start_epoch = checkpoint.get("epoch", 0)
             self.best_pred = checkpoint.get("best_pred", 0.0)
-            print("=> loaded checkpoint '{}' (epoch {})".format(args.resume, args.start_epoch))
+            print("[Checkpoint] loaded '{}' (epoch {})".format(args.resume, args.start_epoch))
 
         if args.ft:
             args.start_epoch = 0
 
+    def print_run_overview(self):
+        test_samples = len(self.test_loader.dataset) if self.test_loader is not None else 0
+        selected_classes = (
+            ",".join(str(class_id) for class_id in self.args.selected_classes)
+            if self.args.selected_classes
+            else "all"
+        )
+        print(
+            "[Run] dataset={} backbone={} classes={} train/val/test={}/{}/{}".format(
+                self.args.dataset,
+                self.args.backbone,
+                self.nclass,
+                len(self.train_loader.dataset),
+                len(self.val_loader.dataset),
+                test_samples,
+            )
+        )
+        print(
+            "[Run] epochs={} batch={} lr={:.6f} resize={} crop={} split={} workers={} gpus={}".format(
+                self.args.epochs,
+                self.args.batch_size,
+                self.args.lr,
+                self.args.resize_mode,
+                self.args.crop_size,
+                self.args.split_profile,
+                self.args.workers,
+                self.args.gpu_ids,
+            )
+        )
+        print(
+            "[Run] checkname={} selected_classes={} progress_bars={} outputs={}".format(
+                self.args.checkname,
+                selected_classes,
+                "on" if self.show_progress else "off",
+                self.saver.experiment_dir,
+            )
+        )
+
     def training(self, epoch):
         train_loss = 0.0
+        epoch_start = time.time()
         self.model.train()
-        tbar = tqdm(self.train_loader)
-        num_img_tr = len(self.train_loader)
-        vis_interval = max(1, num_img_tr // 10)
+        num_batches = len(self.train_loader)
+        vis_interval = max(1, num_batches // 10)
+        tbar = tqdm(
+            self.train_loader,
+            desc="Train {:03d}/{:03d}".format(epoch + 1, self.args.epochs),
+            dynamic_ncols=True,
+            leave=False,
+            disable=not self.show_progress,
+        )
 
         for i, sample in enumerate(tbar):
             image, target = sample["image"], sample["label"]
@@ -134,16 +210,30 @@ class Trainer(object):
             self.optimizer.step()
 
             train_loss += loss.item()
-            tbar.set_description("Train loss: {:.3f}".format(train_loss / (i + 1)))
-            global_step = i + num_img_tr * epoch
+            average_loss = train_loss / (i + 1)
+            current_lr = self.optimizer.param_groups[0]["lr"]
+            if self.show_progress:
+                tbar.set_postfix(loss="{:.4f}".format(average_loss), lr="{:.6f}".format(current_lr), refresh=False)
+
+            global_step = i + num_batches * epoch
             self.writer.add_scalar("train/total_loss_iter", loss.item(), global_step)
 
             if i % vis_interval == 0:
                 self.summary.visualize_image(self.writer, self.args.dataset, image, target, output, global_step)
 
-        self.writer.add_scalar("train/total_loss_epoch", train_loss, epoch)
-        print("[Epoch: {}, numImages: {}]".format(epoch, len(self.train_loader.dataset)))
-        print("Loss: {:.3f}".format(train_loss))
+        average_train_loss = train_loss / max(1, num_batches)
+        self.writer.add_scalar("train/total_loss_epoch", average_train_loss, epoch)
+        print(
+            "[Epoch {:03d}/{:03d}] train loss={:.4f} lr={:.6f} steps={} samples={} time={}".format(
+                epoch + 1,
+                self.args.epochs,
+                average_train_loss,
+                self.optimizer.param_groups[0]["lr"],
+                num_batches,
+                len(self.train_loader.dataset),
+                format_duration(time.time() - epoch_start),
+            )
+        )
 
         if self.args.no_val:
             self.saver.save_checkpoint(
@@ -159,7 +249,14 @@ class Trainer(object):
     def validation(self, epoch):
         self.model.eval()
         self.evaluator.reset()
-        tbar = tqdm(self.val_loader, desc="\r")
+        epoch_start = time.time()
+        tbar = tqdm(
+            self.val_loader,
+            desc="Val   {:03d}/{:03d}".format(epoch + 1, self.args.epochs),
+            dynamic_ncols=True,
+            leave=False,
+            disable=not self.show_progress,
+        )
         test_loss = 0.0
 
         for i, sample in enumerate(tbar):
@@ -173,19 +270,25 @@ class Trainer(object):
 
             loss = self.criterion(output, target)
             test_loss += loss.item()
-            tbar.set_description("Val loss: {:.3f}".format(test_loss / (i + 1)))
+            if self.show_progress:
+                average_loss = test_loss / (i + 1)
+                tbar.set_postfix(loss="{:.4f}".format(average_loss), refresh=False)
 
             pred = output.detach().cpu().numpy()
             target_np = target.detach().cpu().numpy()
             pred = np.argmax(pred, axis=1)
             self.evaluator.add_batch(target_np, pred)
 
+        average_val_loss = test_loss / max(1, len(self.val_loader))
         acc = self.evaluator.Pixel_Accuracy()
         acc_class = self.evaluator.Pixel_Accuracy_Class()
         miou = self.evaluator.Mean_Intersection_over_Union()
         fwiou = self.evaluator.Frequency_Weighted_Intersection_over_Union()
+        per_class_iou = self.evaluator.per_class_iou()
+        valid_class_count = int(self.evaluator.valid_class_mask().sum())
+        top_iou_summary = format_top_class_metrics(per_class_iou)
 
-        self.writer.add_scalar("val/total_loss_epoch", test_loss, epoch)
+        self.writer.add_scalar("val/total_loss_epoch", average_val_loss, epoch)
         self.writer.add_scalar("val/mIoU", miou, epoch)
         self.writer.add_scalar("val/Acc", acc, epoch)
         self.writer.add_scalar("val/Acc_class", acc_class, epoch)
@@ -205,18 +308,23 @@ class Trainer(object):
             is_best=is_best,
         )
 
-        print("Validation:")
-        print("[Epoch: {}, numImages: {}]".format(epoch, len(self.val_loader.dataset)))
         print(
-            "Acc:{}, Acc_class:{}, mIoU:{}, fwIoU:{}, best_mIoU:{}".format(
+            "[Epoch {:03d}/{:03d}] val   loss={:.4f} acc={:.4f} acc_cls={:.4f} mIoU={:.4f} fwIoU={:.4f} best={:.4f} valid_cls={}/{} time={}".format(
+                epoch + 1,
+                self.args.epochs,
+                average_val_loss,
                 acc,
                 acc_class,
                 miou,
                 fwiou,
                 self.best_pred,
+                valid_class_count,
+                self.nclass,
+                format_duration(time.time() - epoch_start),
             )
         )
-        print("Loss: {:.3f}".format(test_loss))
+        if top_iou_summary != "none":
+            print("  per-class IoU>0: {}".format(top_iou_summary))
 
 
 def build_parser():
@@ -303,6 +411,7 @@ def build_parser():
     parser.add_argument("--ft", action="store_true", default=False, help="finetune from a checkpoint")
     parser.add_argument("--eval-interval", type=int, default=1, help="validation interval")
     parser.add_argument("--no-val", action="store_true", default=False, help="skip validation")
+    parser.add_argument("--no-progress", action="store_true", default=False, help="disable tqdm progress bars")
     return parser
 
 
@@ -373,10 +482,9 @@ def main():
     apply_runtime_defaults(args)
     set_random_seed(args.seed, args.cuda)
 
-    print(args)
     trainer = Trainer(args)
-    print("Starting Epoch:", trainer.args.start_epoch)
-    print("Total Epochs:", trainer.args.epochs)
+    trainer.print_run_overview()
+    print("[Run] start_epoch={} total_epochs={}".format(trainer.args.start_epoch, trainer.args.epochs))
 
     for epoch in range(trainer.args.start_epoch, trainer.args.epochs):
         trainer.training(epoch)

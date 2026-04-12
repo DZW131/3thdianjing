@@ -151,6 +151,8 @@ python train.py \
   --eval-interval 1
 ```
 
+For compact server logs, append `--no-progress` to disable tqdm progress bars while keeping the epoch summaries.
+
 ### Class-Filtered Training
 
 `jijie.py` supports remapping a selected subset of original class ids into a compact label space.

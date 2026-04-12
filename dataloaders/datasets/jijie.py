@@ -110,8 +110,8 @@ class JijieSegmentation(Dataset):
 
         assert len(self.images) == len(self.categories)
         print(
-            "Loaded jijie split={} profile={} size_policy={} samples={}".format(
-                self.split,
+            "[Data] jijie split={} profile={} resize={} samples={}".format(
+                ",".join(self.split),
                 self.split_profile,
                 self.resize_mode,
                 len(self.images),
