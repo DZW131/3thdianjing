@@ -5,6 +5,10 @@ def _build_loader(dataset, batch_size, shuffle, **kwargs):
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, **kwargs)
 
 
+def _build_train_loader(dataset, batch_size, **kwargs):
+    return DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True, **kwargs)
+
+
 def make_data_loader(args, **kwargs):
     eval_batch_size = args.test_batch_size or args.batch_size
 
@@ -18,7 +22,7 @@ def make_data_loader(args, **kwargs):
             train_set = combine_dbs.CombineDBs([train_set, sbd_train], excluded=[val_set])
 
         num_class = train_set.NUM_CLASSES
-        train_loader = _build_loader(train_set, args.batch_size, True, **kwargs)
+        train_loader = _build_train_loader(train_set, args.batch_size, **kwargs)
         val_loader = _build_loader(val_set, eval_batch_size, False, **kwargs)
         return train_loader, val_loader, None, num_class
 
@@ -29,7 +33,7 @@ def make_data_loader(args, **kwargs):
         val_set = cityscapes.CityscapesSegmentation(args, split="val")
         test_set = cityscapes.CityscapesSegmentation(args, split="test")
         num_class = train_set.NUM_CLASSES
-        train_loader = _build_loader(train_set, args.batch_size, True, **kwargs)
+        train_loader = _build_train_loader(train_set, args.batch_size, **kwargs)
         val_loader = _build_loader(val_set, eval_batch_size, False, **kwargs)
         test_loader = _build_loader(test_set, eval_batch_size, False, **kwargs)
         return train_loader, val_loader, test_loader, num_class
@@ -40,7 +44,7 @@ def make_data_loader(args, **kwargs):
         train_set = coco.COCOSegmentation(args, split="train")
         val_set = coco.COCOSegmentation(args, split="val")
         num_class = train_set.NUM_CLASSES
-        train_loader = _build_loader(train_set, args.batch_size, True, **kwargs)
+        train_loader = _build_train_loader(train_set, args.batch_size, **kwargs)
         val_loader = _build_loader(val_set, eval_batch_size, False, **kwargs)
         return train_loader, val_loader, None, num_class
 
@@ -50,7 +54,7 @@ def make_data_loader(args, **kwargs):
         train_set = her2_region.Her2Segmentation(args, split="train")
         val_set = her2_region.Her2Segmentation(args, split="val")
         num_class = train_set.NUM_CLASSES
-        train_loader = _build_loader(train_set, args.batch_size, True, **kwargs)
+        train_loader = _build_train_loader(train_set, args.batch_size, **kwargs)
         val_loader = _build_loader(val_set, eval_batch_size, False, **kwargs)
         return train_loader, val_loader, None, num_class
 
@@ -60,7 +64,7 @@ def make_data_loader(args, **kwargs):
         train_set = feiai_region.FeiaiSegmentation(args, split="train")
         val_set = feiai_region.FeiaiSegmentation(args, split="val")
         num_class = train_set.NUM_CLASSES
-        train_loader = _build_loader(train_set, args.batch_size, True, **kwargs)
+        train_loader = _build_train_loader(train_set, args.batch_size, **kwargs)
         val_loader = _build_loader(val_set, eval_batch_size, False, **kwargs)
         return train_loader, val_loader, None, num_class
 
@@ -70,7 +74,7 @@ def make_data_loader(args, **kwargs):
         train_set = beiertongbxr_region.BeiertongbxrSegmentation(args, split="train")
         val_set = beiertongbxr_region.BeiertongbxrSegmentation(args, split="val")
         num_class = train_set.NUM_CLASSES
-        train_loader = _build_loader(train_set, args.batch_size, True, **kwargs)
+        train_loader = _build_train_loader(train_set, args.batch_size, **kwargs)
         val_loader = _build_loader(val_set, eval_batch_size, False, **kwargs)
         return train_loader, val_loader, None, num_class
 
@@ -80,7 +84,7 @@ def make_data_loader(args, **kwargs):
         train_set = qidai_region.QidaiSegmentation(args, split="train")
         val_set = qidai_region.QidaiSegmentation(args, split="val")
         num_class = train_set.NUM_CLASSES
-        train_loader = _build_loader(train_set, args.batch_size, True, **kwargs)
+        train_loader = _build_train_loader(train_set, args.batch_size, **kwargs)
         val_loader = _build_loader(val_set, eval_batch_size, False, **kwargs)
         return train_loader, val_loader, None, num_class
 
@@ -90,7 +94,7 @@ def make_data_loader(args, **kwargs):
         train_set = taimo_region.TaimoSegmentation(args, split="train")
         val_set = taimo_region.TaimoSegmentation(args, split="val")
         num_class = train_set.NUM_CLASSES
-        train_loader = _build_loader(train_set, args.batch_size, True, **kwargs)
+        train_loader = _build_train_loader(train_set, args.batch_size, **kwargs)
         val_loader = _build_loader(val_set, eval_batch_size, False, **kwargs)
         return train_loader, val_loader, None, num_class
 
@@ -100,7 +104,7 @@ def make_data_loader(args, **kwargs):
         train_set = prostate_tls.FeiaiSegmentation(args, split="train")
         val_set = prostate_tls.FeiaiSegmentation(args, split="val")
         num_class = train_set.NUM_CLASSES
-        train_loader = _build_loader(train_set, args.batch_size, True, **kwargs)
+        train_loader = _build_train_loader(train_set, args.batch_size, **kwargs)
         val_loader = _build_loader(val_set, eval_batch_size, False, **kwargs)
         return train_loader, val_loader, None, num_class
 
@@ -117,7 +121,7 @@ def make_data_loader(args, **kwargs):
             print("[Data] jijie test split not found; evaluation will fall back to the validation split.")
 
         num_class = train_set.NUM_CLASSES
-        train_loader = _build_loader(train_set, args.batch_size, True, **kwargs)
+        train_loader = _build_train_loader(train_set, args.batch_size, **kwargs)
         val_loader = _build_loader(val_set, eval_batch_size, False, **kwargs)
         return train_loader, val_loader, test_loader, num_class
 
