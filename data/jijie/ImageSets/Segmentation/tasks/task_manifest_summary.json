@@ -1,0 +1,236 @@
+{
+  "mito": {
+    "default": {
+      "task_name": "mito",
+      "train_count": 101,
+      "val_count": 66,
+      "test_count": 69,
+      "positive_total": 236,
+      "partial_total": 7,
+      "manual_review_total": 186
+    },
+    "folds": [
+      {
+        "fold_index": 0,
+        "train_count": 133,
+        "val_count": 34,
+        "val_group_ids": [
+          "100727",
+          "102270",
+          "78192",
+          "98307"
+        ]
+      },
+      {
+        "fold_index": 1,
+        "train_count": 133,
+        "val_count": 34,
+        "val_group_ids": [
+          "100519",
+          "101297",
+          "101720",
+          "104173",
+          "78709",
+          "79442"
+        ]
+      },
+      {
+        "fold_index": 2,
+        "train_count": 134,
+        "val_count": 33,
+        "val_group_ids": [
+          "101509",
+          "101581",
+          "101773",
+          "102487",
+          "95128",
+          "95988"
+        ]
+      },
+      {
+        "fold_index": 3,
+        "train_count": 134,
+        "val_count": 33,
+        "val_group_ids": [
+          "100963",
+          "101165",
+          "101431",
+          "102478",
+          "106363",
+          "109395",
+          "99574"
+        ]
+      },
+      {
+        "fold_index": 4,
+        "train_count": 134,
+        "val_count": 33,
+        "val_group_ids": [
+          "100404",
+          "101685",
+          "102455",
+          "102966",
+          "76355",
+          "82765",
+          "99575"
+        ]
+      }
+    ]
+  },
+  "mito_sr": {
+    "default": {
+      "task_name": "mito_sr",
+      "train_count": 101,
+      "val_count": 66,
+      "test_count": 69,
+      "positive_total": 236,
+      "partial_total": 7,
+      "manual_review_total": 186
+    },
+    "folds": [
+      {
+        "fold_index": 0,
+        "train_count": 133,
+        "val_count": 34,
+        "val_group_ids": [
+          "100727",
+          "102270",
+          "78192",
+          "98307"
+        ]
+      },
+      {
+        "fold_index": 1,
+        "train_count": 133,
+        "val_count": 34,
+        "val_group_ids": [
+          "100519",
+          "101297",
+          "101720",
+          "104173",
+          "78709",
+          "79442"
+        ]
+      },
+      {
+        "fold_index": 2,
+        "train_count": 134,
+        "val_count": 33,
+        "val_group_ids": [
+          "101509",
+          "101581",
+          "101773",
+          "102487",
+          "95128",
+          "95988"
+        ]
+      },
+      {
+        "fold_index": 3,
+        "train_count": 134,
+        "val_count": 33,
+        "val_group_ids": [
+          "100963",
+          "101165",
+          "101431",
+          "102478",
+          "106363",
+          "109395",
+          "99574"
+        ]
+      },
+      {
+        "fold_index": 4,
+        "train_count": 134,
+        "val_count": 33,
+        "val_group_ids": [
+          "100404",
+          "101685",
+          "102455",
+          "102966",
+          "76355",
+          "82765",
+          "99575"
+        ]
+      }
+    ]
+  },
+  "sarcomere": {
+    "default": {
+      "task_name": "sarcomere",
+      "train_count": 101,
+      "val_count": 64,
+      "test_count": 67,
+      "positive_total": 221,
+      "partial_total": 22,
+      "manual_review_total": 190
+    },
+    "folds": [
+      {
+        "fold_index": 0,
+        "train_count": 132,
+        "val_count": 33,
+        "val_group_ids": [
+          "101431",
+          "101509",
+          "102455",
+          "78192"
+        ]
+      },
+      {
+        "fold_index": 1,
+        "train_count": 132,
+        "val_count": 33,
+        "val_group_ids": [
+          "100404",
+          "100727",
+          "100963",
+          "101720",
+          "98307"
+        ]
+      },
+      {
+        "fold_index": 2,
+        "train_count": 132,
+        "val_count": 33,
+        "val_group_ids": [
+          "100519",
+          "101297",
+          "101581",
+          "101685",
+          "101773",
+          "102966",
+          "95128"
+        ]
+      },
+      {
+        "fold_index": 3,
+        "train_count": 132,
+        "val_count": 33,
+        "val_group_ids": [
+          "101165",
+          "102270",
+          "102478",
+          "102487",
+          "104173",
+          "109395",
+          "82765"
+        ]
+      },
+      {
+        "fold_index": 4,
+        "train_count": 132,
+        "val_count": 33,
+        "val_group_ids": [
+          "106363",
+          "76355",
+          "79442",
+          "95988",
+          "98915",
+          "99574",
+          "99575"
+        ]
+      }
+    ]
+  }
+}

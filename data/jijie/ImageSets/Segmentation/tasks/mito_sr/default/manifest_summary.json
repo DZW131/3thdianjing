@@ -1,0 +1,9 @@
+{
+  "task_name": "mito_sr",
+  "train_count": 101,
+  "val_count": 66,
+  "test_count": 69,
+  "positive_total": 236,
+  "partial_total": 7,
+  "manual_review_total": 186
+}

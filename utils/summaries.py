@@ -1,14 +1,26 @@
-import os
-
 import torch
 from torchvision.utils import make_grid
 
-try:
-    from torch.utils.tensorboard import SummaryWriter
-except ImportError:
-    from tensorboardX import SummaryWriter
-
 from dataloaders.utils import decode_seg_map_sequence
+
+try:
+    from torch.utils.tensorboard import SummaryWriter  # type: ignore
+except ImportError:
+    try:
+        from tensorboardX import SummaryWriter  # type: ignore
+    except ImportError:
+        class SummaryWriter(object):
+            def __init__(self, *args, **kwargs):
+                self.log_dir = kwargs.get("log_dir")
+
+            def add_image(self, *args, **kwargs):
+                return None
+
+            def add_scalar(self, *args, **kwargs):
+                return None
+
+            def close(self):
+                return None
 
 
 class TensorboardSummary(object):

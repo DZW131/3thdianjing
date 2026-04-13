@@ -9,24 +9,8 @@ from torchvision import transforms
 
 from dataloaders import custom_transforms as tr
 from mypath import Path
+from utils.jijie.tasks import CLASS_NAMES
 
-
-CLASS_NAMES = [
-    "Background",
-    "严重损伤线粒体",
-    "中度损伤线粒体",
-    "健康线粒体",
-    "自噬线粒体",
-    "肌浆网",
-    "闰盘",
-    "Z线样物质堆积",
-    "脂滴",
-    "糖原颗粒",
-    "Z线",
-    "T管",
-    "M线",
-    "心肌侧管",
-]
 
 SPLIT_PROFILE_SUFFIX = {
     "annotated": "",
@@ -37,7 +21,6 @@ SPLIT_PROFILE_SUFFIX = {
 def _normalize_selected_classes(selected_classes):
     if selected_classes is None:
         return None
-
     if isinstance(selected_classes, str):
         selected_classes = [item.strip() for item in selected_classes.split(",") if item.strip()]
 
@@ -48,7 +31,7 @@ def _normalize_selected_classes(selected_classes):
             raise ValueError("selected class ids must be in [1, {}], got {}".format(len(CLASS_NAMES) - 1, value))
         if value not in normalized:
             normalized.append(value)
-    return normalized
+    return normalized or None
 
 
 class JijieSegmentation(Dataset):
@@ -60,7 +43,7 @@ class JijieSegmentation(Dataset):
         self._base_dir = base_dir
         self._image_dir = os.path.join(self._base_dir, "JPEGImages")
         self._cat_dir = os.path.join(self._base_dir, "SegmentationClass")
-        self._splits_dir = os.path.join(self._base_dir, "ImageSets", "Segmentation")
+        self._default_splits_dir = os.path.join(self._base_dir, "ImageSets", "Segmentation")
 
         if isinstance(split, str):
             self.split = [split]
@@ -68,18 +51,21 @@ class JijieSegmentation(Dataset):
             self.split = sorted(split)
 
         self.split_profile = getattr(args, "split_profile", "annotated")
-        if self.split_profile not in SPLIT_PROFILE_SUFFIX:
-            raise ValueError(
-                "Unsupported split profile '{}'. Expected one of {}.".format(
-                    self.split_profile, sorted(SPLIT_PROFILE_SUFFIX)
-                )
-            )
-
-        self.resize_mode = getattr(args, "resize_mode", "pad")
+        self.manifest_dir = getattr(args, "manifest_dir", None)
         self.selected_classes = _normalize_selected_classes(getattr(args, "selected_classes", None))
+        self.task_name = getattr(args, "task_name", None)
+
         self.class_mapping = None
         self.class_names = CLASS_NAMES
         self.NUM_CLASSES = len(CLASS_NAMES)
+
+        if not os.path.isdir(self._image_dir):
+            raise FileNotFoundError(
+                "Missing jijie image directory: {}. "
+                "The prepared dataset currently needs JPEGImages alongside SegmentationClass.".format(self._image_dir)
+            )
+        if not os.path.isdir(self._cat_dir):
+            raise FileNotFoundError("Missing jijie mask directory: {}".format(self._cat_dir))
 
         if self.selected_classes is not None:
             self.class_mapping = {0: 0}
@@ -95,7 +81,7 @@ class JijieSegmentation(Dataset):
         for split_name in self.split:
             split_file = self._resolve_split_file(split_name)
             with open(split_file, "r", encoding="utf-8") as handle:
-                lines = handle.read().splitlines()
+                lines = [line.strip() for line in handle.read().splitlines() if line.strip()]
 
             for image_id in lines:
                 image_path = os.path.join(self._image_dir, image_id + ".jpg")
@@ -110,17 +96,31 @@ class JijieSegmentation(Dataset):
 
         assert len(self.images) == len(self.categories)
         print(
-            "[Data] jijie split={} profile={} resize={} samples={}".format(
+            "[Data] jijie split={} task={} profile={} manifest={} train_resize={} eval_resize={} samples={}".format(
                 ",".join(self.split),
+                self.task_name or "default",
                 self.split_profile,
-                self.resize_mode,
+                self.manifest_dir or "default",
+                getattr(self.args, "train_resize_mode", getattr(self.args, "resize_mode", "pad")),
+                getattr(self.args, "eval_resize_mode", getattr(self.args, "resize_mode", "pad")),
                 len(self.images),
             )
         )
 
     def _resolve_split_file(self, split_name):
-        suffix = SPLIT_PROFILE_SUFFIX[self.split_profile]
-        split_file = os.path.join(self._splits_dir, "{}{}.txt".format(split_name, suffix))
+        if self.manifest_dir:
+            split_file = os.path.join(self.manifest_dir, "{}.txt".format(split_name))
+        else:
+            suffix = SPLIT_PROFILE_SUFFIX.get(self.split_profile)
+            if suffix is None:
+                raise ValueError(
+                    "Unsupported split profile '{}'. Expected one of {}.".format(
+                        self.split_profile,
+                        sorted(SPLIT_PROFILE_SUFFIX),
+                    )
+                )
+            split_file = os.path.join(self._default_splits_dir, "{}{}.txt".format(split_name, suffix))
+
         if not os.path.isfile(split_file):
             raise FileNotFoundError("Missing split file: {}".format(split_file))
         return split_file
@@ -130,7 +130,15 @@ class JijieSegmentation(Dataset):
 
     def __getitem__(self, index):
         image, target = self._make_img_gt_point_pair(index)
-        sample = {"image": image, "label": target}
+        sample = {
+            "image": image,
+            "label": target,
+            "sample_id": self.im_ids[index],
+            "image_path": self.images[index],
+            "mask_path": self.categories[index],
+            "original_size": image.size[::-1],
+            "task_name": self.task_name or "",
+        }
 
         if "train" in self.split:
             return self.transform_tr(sample)
@@ -139,10 +147,8 @@ class JijieSegmentation(Dataset):
     def _make_img_gt_point_pair(self, index):
         image = Image.open(self.images[index]).convert("RGB")
         target = Image.open(self.categories[index])
-
         if self.class_mapping is not None:
             target = self._remap_classes(target)
-
         return image, target
 
     def _remap_classes(self, target_pil):
@@ -159,23 +165,51 @@ class JijieSegmentation(Dataset):
         return Image.fromarray(new_target.astype(np.uint8))
 
     def _build_resize_transform(self, train):
-        if self.resize_mode == "none":
+        resize_mode = getattr(
+            self.args,
+            "train_resize_mode" if train else "eval_resize_mode",
+            getattr(self.args, "resize_mode", "pad"),
+        )
+        crop_size = getattr(self.args, "crop_size", 512)
+
+        if resize_mode == "none":
             return None
-        if self.resize_mode == "crop":
+        if resize_mode == "crop":
             if train:
-                return tr.RandomScaleCrop(base_size=self.args.base_size, crop_size=self.args.crop_size)
-            return tr.FixScaleCrop(crop_size=self.args.crop_size)
-        if self.resize_mode == "resize":
-            return tr.FixedResize(self.args.crop_size)
-        if self.resize_mode == "pad":
-            return tr.ResizeLongestSideAndPad(self.args.crop_size)
-        raise ValueError("Unsupported resize_mode '{}'".format(self.resize_mode))
+                return tr.RandomScaleCrop(base_size=self.args.base_size, crop_size=crop_size)
+            return tr.FixScaleCrop(crop_size=crop_size)
+        if resize_mode == "random_crop":
+            return tr.RandomCropPad(crop_size=crop_size)
+        if resize_mode == "resize":
+            return tr.FixedResize(crop_size)
+        if resize_mode == "pad":
+            return tr.ResizeLongestSideAndPad(crop_size)
+        raise ValueError("Unsupported resize_mode '{}'".format(resize_mode))
+
+    def _build_optional_label_dilation(self):
+        class_ids = getattr(self.args, "label_dilate_class_ids", None)
+        radius = getattr(self.args, "label_dilate_radius", 0)
+        if not class_ids or radius <= 0:
+            return None
+        return tr.DilateMaskClasses(class_ids, radius)
 
     def transform_tr(self, sample):
-        transforms_list = [tr.RandomHorizontalFlip()]
+        transforms_list = [
+            tr.RandomHorizontalFlip(),
+        ]
+        if getattr(self.args, "train_vertical_flip", False):
+            transforms_list.append(tr.RandomVerticalFlip())
+        if getattr(self.args, "train_rotate_degree", 0):
+            transforms_list.append(tr.RandomRotate(self.args.train_rotate_degree))
+
         resize_transform = self._build_resize_transform(train=True)
         if resize_transform is not None:
             transforms_list.append(resize_transform)
+
+        dilation_transform = self._build_optional_label_dilation()
+        if dilation_transform is not None:
+            transforms_list.append(dilation_transform)
+
         transforms_list.extend(
             [
                 tr.RandomGaussianBlur(),
@@ -199,7 +233,11 @@ class JijieSegmentation(Dataset):
         return transforms.Compose(transforms_list)(sample)
 
     def __str__(self):
-        return "JijieSegmentation(split={}, profile={})".format(self.split, self.split_profile)
+        return "JijieSegmentation(split={}, task={}, manifest={})".format(
+            self.split,
+            self.task_name or "default",
+            self.manifest_dir or "default",
+        )
 
 
 FeiaiSegmentation = JijieSegmentation

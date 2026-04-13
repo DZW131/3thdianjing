@@ -1,0 +1,9 @@
+{
+  "task_name": "sarcomere",
+  "train_count": 101,
+  "val_count": 64,
+  "test_count": 67,
+  "positive_total": 221,
+  "partial_total": 22,
+  "manual_review_total": 190
+}

@@ -9,3 +9,9 @@ __pycache__/
 run/
 outputs/
 *.log
+fenge_datasets/
+data/jijie_audit/
+data/jijie/JPEGImages/
+*.pth.tar
+data/jijie/metadata/data_usability_audit*
+data/jijie/metadata/manual_review_checklist*

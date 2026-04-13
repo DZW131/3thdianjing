@@ -43,18 +43,27 @@ class Saver(object):
 
     def save_experiment_config(self):
         logfile = os.path.join(self.experiment_dir, 'parameters.txt')
-        log_file = open(logfile, 'w')
-        p = OrderedDict()
-        p['datset'] = self.args.dataset
-        p['backbone'] = self.args.backbone
-        p['out_stride'] = self.args.out_stride
-        p['lr'] = self.args.lr
-        p['lr_scheduler'] = self.args.lr_scheduler
-        p['loss_type'] = self.args.loss_type
-        p['epoch'] = self.args.epochs
-        p['base_size'] = self.args.base_size
-        p['crop_size'] = self.args.crop_size
+        with open(logfile, 'w', encoding='utf-8') as log_file:
+            p = OrderedDict()
+            p['dataset'] = getattr(self.args, 'dataset', '')
+            p['task_name'] = getattr(self.args, 'task_name', '')
+            p['backbone'] = getattr(self.args, 'backbone', '')
+            p['out_stride'] = getattr(self.args, 'out_stride', '')
+            p['lr'] = getattr(self.args, 'lr', '')
+            p['lr_scheduler'] = getattr(self.args, 'lr_scheduler', '')
+            p['loss_type'] = getattr(self.args, 'loss_type', '')
+            p['epochs'] = getattr(self.args, 'epochs', '')
+            p['base_size'] = getattr(self.args, 'base_size', '')
+            p['crop_size'] = getattr(self.args, 'crop_size', '')
+            p['train_resize_mode'] = getattr(self.args, 'train_resize_mode', '')
+            p['eval_resize_mode'] = getattr(self.args, 'eval_resize_mode', '')
+            p['selected_classes'] = getattr(self.args, 'selected_classes', '')
+            p['manifest_dir'] = getattr(self.args, 'manifest_dir', '')
+            p['config'] = getattr(self.args, 'config', '')
 
-        for key, val in p.items():
-            log_file.write(key + ':' + str(val) + '\n')
-        log_file.close()
+            for key in sorted(vars(self.args).keys()):
+                if key not in p:
+                    p[key] = getattr(self.args, key)
+
+            for key, val in p.items():
+                log_file.write(key + ':' + str(val) + '\n')

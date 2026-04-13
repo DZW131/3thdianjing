@@ -1,0 +1,11 @@
+{
+  "fold_index": 0,
+  "train_count": 133,
+  "val_count": 34,
+  "val_group_ids": [
+    "100727",
+    "102270",
+    "78192",
+    "98307"
+  ]
+}
