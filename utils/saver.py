@@ -16,14 +16,17 @@ class Saver(object):
         if not os.path.exists(self.experiment_dir):
             os.makedirs(self.experiment_dir)
 
-    def save_checkpoint(self, state, is_best, filename='checkpoint.pth.tar'):
+    def save_checkpoint(self, state, is_best, filename='checkpoint.pth.tar', force_best=False):
         """Saves checkpoint to disk"""
         filename = os.path.join(self.experiment_dir, filename)
         torch.save(state, filename)
-        if is_best:
+        if is_best or force_best:
             best_pred = state['best_pred']
             with open(os.path.join(self.experiment_dir, 'best_pred.txt'), 'w') as f:
                 f.write(str(best_pred))
+            if force_best:
+                shutil.copyfile(filename, os.path.join(self.directory, 'model_best.pth.tar'))
+                return
             if self.runs:
                 previous_miou = [0.0]
                 for run in self.runs:

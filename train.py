@@ -70,6 +70,10 @@ class Trainer(object):
 
         loader_kwargs = {"num_workers": args.workers, "pin_memory": args.cuda}
         self.train_loader, self.val_loader, self.test_loader, self.nclass = make_data_loader(args, **loader_kwargs)
+        self.has_validation = len(self.val_loader.dataset) > 0
+        if not self.has_validation and not args.no_val:
+            print("[Run] validation split is empty; switching to no-val mode for this run.")
+            args.no_val = True
 
         model = DeepLab(
             num_classes=self.nclass,
@@ -157,7 +161,7 @@ class Trainer(object):
             "[Run] checkname={} loss={} selection_metric={} outputs={}".format(
                 self.args.checkname,
                 self.args.loss_type,
-                self.args.selection_metric,
+                "final_epoch" if self.args.no_val else self.args.selection_metric,
                 self.saver.experiment_dir,
             )
         )
@@ -218,16 +222,29 @@ class Trainer(object):
         )
 
         if self.args.no_val:
+            selection_score = float(epoch + 1)
+            is_final_epoch = (epoch + 1) == self.args.epochs
             self.saver.save_checkpoint(
                 {
                     "epoch": epoch + 1,
                     "state_dict": state_dict_from_model(self.model),
                     "optimizer": self.optimizer.state_dict(),
-                    "best_pred": self.best_pred,
-                    "selection_score": self.best_pred,
+                    "best_pred": selection_score,
+                    "selection_score": selection_score,
+                    "selection_metric_name": "final_epoch",
                 },
                 is_best=False,
+                filename="checkpoint_last.pth.tar",
+                force_best=is_final_epoch,
             )
+            if is_final_epoch:
+                self.best_pred = selection_score
+                print(
+                    "[Epoch {:03d}/{:03d}] no-val final checkpoint promoted to model_best.pth.tar".format(
+                        epoch + 1,
+                        self.args.epochs,
+                    )
+                )
 
     def _select_validation_score(self, metric_summary):
         metric_name = self.args.selection_metric
@@ -506,7 +523,7 @@ def main():
 
     for epoch in range(trainer.args.start_epoch, trainer.args.epochs):
         trainer.training(epoch)
-        if not trainer.args.no_val and epoch % args.eval_interval == args.eval_interval - 1:
+        if trainer.has_validation and not trainer.args.no_val and epoch % args.eval_interval == args.eval_interval - 1:
             trainer.validation(epoch)
 
     trainer.writer.close()

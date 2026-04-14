@@ -20,10 +20,8 @@ def _make_blend_weight(height, width, device):
     return torch.clamp(weight, min=0.25).unsqueeze(0).unsqueeze(0)
 
 
-def sliding_window_inference(model, image, num_classes, window_size, stride):
-    batch_size, _, height, width = image.shape
-    if batch_size != 1:
-        raise ValueError("Sliding window inference currently expects batch_size=1, got {}".format(batch_size))
+def _sliding_window_single(model, image, num_classes, window_size, stride):
+    _, _, height, width = image.shape
 
     if height <= window_size and width <= window_size:
         return model(image)
@@ -56,6 +54,22 @@ def sliding_window_inference(model, image, num_classes, window_size, stride):
             weight_sum[:, :, top:bottom, left:right] += weight
 
     return logits_sum / torch.clamp(weight_sum, min=1e-6)
+
+
+def sliding_window_inference(model, image, num_classes, window_size, stride):
+    batch_size = image.shape[0]
+    outputs = []
+    for batch_index in range(batch_size):
+        outputs.append(
+            _sliding_window_single(
+                model,
+                image[batch_index : batch_index + 1],
+                num_classes=num_classes,
+                window_size=window_size,
+                stride=stride,
+            )
+        )
+    return torch.cat(outputs, dim=0)
 
 
 def predict_logits(model, image, num_classes, inference_mode="direct", window_size=None, stride=None):

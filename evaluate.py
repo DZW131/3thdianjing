@@ -15,12 +15,12 @@ import torch
 from tqdm import tqdm
 
 from dataloaders import make_data_loader
-from dataloaders.utils import decode_segmap
 from modeling.deeplab import DeepLab
 from utils.checkpoint import load_checkpoint
 from utils.jijie import apply_json_config_overrides, finalize_jijie_args, summarize_jijie_run
 from utils.jijie.inference import predict_logits
 from utils.jijie.quantify import quantify_task_prediction
+from utils.jijie.visualization import blend_mask, colorize_mask, palette_rows, render_class_legend
 from utils.metrics import Evaluator
 
 try:
@@ -35,6 +35,8 @@ def auto_resume_path(dataset_name):
         return None
     candidates = sorted(run_root.glob("*/model_best.pth.tar"))
     if not candidates:
+        candidates = sorted(run_root.glob("*/checkpoint_last.pth.tar"))
+    if not candidates:
         return None
     return str(candidates[-1])
 
@@ -46,12 +48,6 @@ def denormalize_image(image_tensor):
     image = std * image + mean
     image = np.clip(image, 0.0, 1.0)
     return (image * 255).astype(np.uint8)
-
-
-def colorize_mask(mask, dataset_name):
-    colored = decode_segmap(mask.astype(np.int64), dataset=dataset_name)
-    return (colored * 255).astype(np.uint8)
-
 
 def ensure_dir(path):
     os.makedirs(path, exist_ok=True)
@@ -244,6 +240,11 @@ class SegmentationEvaluator(object):
             summary["per_class_metrics"],
             ["class_id", "class_name", "iou", "dice", "precision", "recall", "pixel_count"],
         )
+        write_csv(
+            os.path.join(self.args.save_dir, "class_palette.csv"),
+            palette_rows(self.class_names),
+            ["class_id", "class_name", "color_r", "color_g", "color_b", "hex_color"],
+        )
         np.savetxt(
             os.path.join(self.args.save_dir, "confusion_matrix.csv"),
             self.evaluator.confusion_matrix,
@@ -291,36 +292,60 @@ class SegmentationEvaluator(object):
 
     def _save_visualizations(self, vis_samples):
         vis_dir = ensure_dir(os.path.join(self.args.save_dir, "visualizations"))
+        legend_figure = render_class_legend(self.class_names, title="Task Class Colors")
+        legend_figure.savefig(os.path.join(vis_dir, "class_legend.png"), dpi=200, bbox_inches="tight")
+        plt.close(legend_figure)
+
         for sample_index, sample in enumerate(vis_samples):
             image = denormalize_image(sample["image"])
             gt_mask = sample["target"].numpy().astype(np.uint8)
             pred_mask = sample["pred"].numpy().astype(np.uint8)
 
-            gt_colored = colorize_mask(gt_mask, self.args.dataset)
-            pred_colored = colorize_mask(pred_mask, self.args.dataset)
-            overlay_gt = np.clip(0.6 * image + 0.4 * gt_colored, 0, 255).astype(np.uint8)
-            overlay_pred = np.clip(0.6 * image + 0.4 * pred_colored, 0, 255).astype(np.uint8)
+            gt_colored = colorize_mask(gt_mask, self.class_names)
+            pred_colored = colorize_mask(pred_mask, self.class_names)
+            overlay_gt = blend_mask(image, gt_colored, alpha=0.4)
+            overlay_pred = blend_mask(image, pred_colored, alpha=0.4)
             diff_mask = np.where(gt_mask == pred_mask, 0, 255).astype(np.uint8)
             diff_colored = np.stack([diff_mask, np.zeros_like(diff_mask), np.zeros_like(diff_mask)], axis=2)
+            present_class_ids = sorted({int(class_id) for class_id in np.unique(np.concatenate([gt_mask.ravel(), pred_mask.ravel()]))})
+            legend_fig = render_class_legend(self.class_names, present_class_ids=present_class_ids, title="Present Classes")
 
-            fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+            fig, axes = plt.subplots(2, 4, figsize=(22, 12))
             panels = [
                 (image, "Original"),
                 (gt_colored, "Ground Truth"),
                 (pred_colored, "Prediction"),
-                (overlay_gt, "Original + GT"),
                 (overlay_pred, "Original + Prediction"),
+                (overlay_gt, "Original + GT"),
                 (diff_colored, "Prediction Error"),
             ]
-            for axis, (panel, title) in zip(axes.flat, panels):
+            flat_axes = axes.flat
+            for axis, (panel, title) in zip(flat_axes, panels):
                 axis.imshow(panel)
                 axis.set_title(title)
                 axis.axis("off")
+            legend_canvas = legend_fig.canvas
+            legend_canvas.draw()
+            legend_image = np.frombuffer(legend_canvas.buffer_rgba(), dtype=np.uint8)
+            legend_image = legend_image.reshape(legend_canvas.get_width_height()[::-1] + (4,))[:, :, :3]
+            remaining_axes = list(axes.flat)[len(panels):]
+            if remaining_axes:
+                remaining_axes[0].imshow(legend_image)
+                remaining_axes[0].set_title("Legend")
+                remaining_axes[0].axis("off")
+            for axis in remaining_axes[1:]:
+                axis.axis("off")
+            plt.close(legend_fig)
 
             plt.tight_layout()
             sample_id = sample.get("sample_id", "sample")
-            plt.savefig(os.path.join(vis_dir, f"{sample_index:03d}_{sample_id}.png"), dpi=300, bbox_inches="tight")
+            prefix = os.path.join(vis_dir, f"{sample_index:03d}_{sample_id}")
+            plt.savefig(prefix + "_composite.png", dpi=300, bbox_inches="tight")
             plt.close(fig)
+            plt.imsave(prefix + "_gt_mask.png", gt_colored)
+            plt.imsave(prefix + "_pred_mask.png", pred_colored)
+            plt.imsave(prefix + "_overlay_gt.png", overlay_gt)
+            plt.imsave(prefix + "_overlay_pred.png", overlay_pred)
 
 
 def build_parser():
