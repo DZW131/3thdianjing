@@ -22,7 +22,7 @@ class DeepLab(nn.Module):
         self.aspp = build_aspp(backbone, output_stride, BatchNorm)
         self.decoder = build_decoder(num_classes, backbone, BatchNorm)
 
-        self.freeze_bn = freeze_bn
+        self.freeze_bn_flag = freeze_bn
 
     def forward(self, input):
         x, low_level_feat = self.backbone(input)
@@ -43,7 +43,7 @@ class DeepLab(nn.Module):
         modules = [self.backbone]
         for i in range(len(modules)):
             for m in modules[i].named_modules():
-                if self.freeze_bn:
+                if self.freeze_bn_flag:
                     if isinstance(m[1], nn.Conv2d):
                         for p in m[1].parameters():
                             if p.requires_grad:
@@ -59,7 +59,7 @@ class DeepLab(nn.Module):
         modules = [self.aspp, self.decoder]
         for i in range(len(modules)):
             for m in modules[i].named_modules():
-                if self.freeze_bn:
+                if self.freeze_bn_flag:
                     if isinstance(m[1], nn.Conv2d):
                         for p in m[1].parameters():
                             if p.requires_grad:
@@ -77,5 +77,4 @@ if __name__ == "__main__":
     input = torch.rand(1, 3, 513, 513)
     output = model(input)
     print(output.size())
-
 

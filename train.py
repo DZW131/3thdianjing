@@ -11,6 +11,7 @@ from tqdm import tqdm
 from dataloaders import make_data_loader
 from modeling.deeplab import DeepLab
 from modeling.sync_batchnorm.replicate import patch_replication_callback
+from modeling.sync_batchnorm.batchnorm import SynchronizedBatchNorm2d
 from mypath import Path
 from utils.calculate_weights import calculate_weigths_labels
 from utils.checkpoint import load_checkpoint, state_dict_from_model
@@ -167,11 +168,21 @@ class Trainer(object):
         )
         for line in summarize_jijie_run(self.args):
             print(line)
+        if self.args.batch_size == 1:
+            print("[Run] batch_size=1 detected; BatchNorm layers will be kept in eval mode during training.")
+
+    def _set_batchnorm_eval(self):
+        target_model = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
+        for module in target_model.modules():
+            if isinstance(module, (torch.nn.BatchNorm2d, SynchronizedBatchNorm2d)):
+                module.eval()
 
     def training(self, epoch):
         train_loss = 0.0
         epoch_start = time.time()
         self.model.train()
+        if self.args.freeze_bn or self.args.batch_size == 1:
+            self._set_batchnorm_eval()
         num_batches = len(self.train_loader)
         vis_interval = max(1, num_batches // 10)
         tbar = tqdm(
