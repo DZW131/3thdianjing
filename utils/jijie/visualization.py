@@ -2,26 +2,28 @@ import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.patches import Rectangle
 
-
-CLASS_COLOR_BY_NAME = {
-    "Background": (0, 0, 0),
-    "严重损伤线粒体": (220, 53, 69),
-    "中度损伤线粒体": (255, 159, 28),
-    "健康线粒体": (46, 196, 182),
-    "自噬线粒体": (131, 56, 236),
-    "肌浆网": (63, 167, 214),
-    "闰盘": (255, 0, 110),
-    "Z线样物质堆积": (255, 195, 0),
-    "脂滴": (44, 182, 125),
-    "糖原颗粒": (176, 122, 161),
-    "Z线": (0, 109, 119),
-    "T管": (245, 158, 11),
-    "M线": (58, 134, 255),
-    "心肌侧管": (107, 76, 154),
-}
+from .tasks import CLASS_NAMES
 
 
-FALLBACK_COLORS = [
+ENGLISH_CLASS_NAMES = [
+    "Background",
+    "Severe Mito",
+    "Moderate Mito",
+    "Healthy Mito",
+    "Autophagic Mito",
+    "Sarc. Reticulum",
+    "Intercalated Disc",
+    "Z-like Deposit",
+    "Lipid Droplet",
+    "Glycogen Granule",
+    "Z-line",
+    "T-tubule",
+    "M-line",
+    "Side Tubule",
+]
+
+
+DEFAULT_CLASS_COLORS = [
     (0, 0, 0),
     (220, 53, 69),
     (255, 159, 28),
@@ -36,9 +38,31 @@ FALLBACK_COLORS = [
     (245, 158, 11),
     (58, 134, 255),
     (107, 76, 154),
+]
+
+
+CLASS_NAME_TO_ENGLISH = {
+    class_name: english_name
+    for class_name, english_name in zip(CLASS_NAMES, ENGLISH_CLASS_NAMES)
+}
+
+
+CLASS_COLOR_BY_NAME = {}
+for class_name, english_name, color in zip(CLASS_NAMES, ENGLISH_CLASS_NAMES, DEFAULT_CLASS_COLORS):
+    CLASS_COLOR_BY_NAME[class_name] = color
+    CLASS_COLOR_BY_NAME[english_name] = color
+
+
+FALLBACK_COLORS = DEFAULT_CLASS_COLORS + [
     (130, 80, 70),
     (50, 50, 50),
 ]
+
+
+def to_display_class_names(class_names, language="en"):
+    if language != "en":
+        return list(class_names)
+    return [CLASS_NAME_TO_ENGLISH.get(class_name, class_name) for class_name in class_names]
 
 
 def build_palette_for_class_names(class_names):
@@ -66,15 +90,18 @@ def blend_mask(image, colored_mask, alpha=0.4):
     return np.clip(overlay, 0, 255).astype(np.uint8)
 
 
-def palette_rows(class_names):
+def palette_rows(class_names, display_class_names=None):
     palette = build_palette_for_class_names(class_names)
+    if display_class_names is None:
+        display_class_names = class_names
     rows = []
-    for class_id, class_name in enumerate(class_names):
+    for class_id, (class_name, display_class_name) in enumerate(zip(class_names, display_class_names)):
         color = palette[class_id]
         rows.append(
             {
                 "class_id": class_id,
                 "class_name": class_name,
+                "class_name_display": display_class_name,
                 "color_r": int(color[0]),
                 "color_g": int(color[1]),
                 "color_b": int(color[2]),
@@ -84,8 +111,10 @@ def palette_rows(class_names):
     return rows
 
 
-def render_class_legend(class_names, present_class_ids=None, title="Class Legend"):
+def render_class_legend(class_names, present_class_ids=None, title="Class Legend", display_class_names=None):
     palette = build_palette_for_class_names(class_names)
+    if display_class_names is None:
+        display_class_names = class_names
     if present_class_ids is None:
         present_class_ids = list(range(len(class_names)))
     present_class_ids = [class_id for class_id in present_class_ids if 0 <= class_id < len(class_names)]
@@ -103,7 +132,7 @@ def render_class_legend(class_names, present_class_ids=None, title="Class Legend
         y = row_count - row_index - 0.8
         color = palette[class_id].astype(np.float32) / 255.0
         ax.add_patch(Rectangle((0.05, y), 0.12, 0.45, facecolor=color, edgecolor="black", linewidth=0.5))
-        ax.text(0.22, y + 0.225, "{}: {}".format(class_id, class_names[class_id]), va="center", fontsize=10)
+        ax.text(0.22, y + 0.225, "{}: {}".format(class_id, display_class_names[class_id]), va="center", fontsize=10)
 
     ax.set_title(title, fontsize=12)
     fig.tight_layout()

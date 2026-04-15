@@ -20,7 +20,13 @@ from utils.checkpoint import load_checkpoint
 from utils.jijie import apply_json_config_overrides, finalize_jijie_args, summarize_jijie_run
 from utils.jijie.inference import predict_logits
 from utils.jijie.quantify import quantify_task_prediction
-from utils.jijie.visualization import blend_mask, colorize_mask, palette_rows, render_class_legend
+from utils.jijie.visualization import (
+    blend_mask,
+    colorize_mask,
+    palette_rows,
+    render_class_legend,
+    to_display_class_names,
+)
 from utils.metrics import Evaluator
 
 try:
@@ -97,6 +103,7 @@ class SegmentationEvaluator(object):
                 print("Test split is unavailable. Falling back to validation split.")
 
         self.class_names = getattr(self.loader.dataset, "class_names", [f"Class_{i}" for i in range(self.nclass)])
+        self.display_class_names = to_display_class_names(self.class_names, language="en")
         self.model = DeepLab(
             num_classes=self.nclass,
             backbone=args.backbone,
@@ -242,8 +249,8 @@ class SegmentationEvaluator(object):
         )
         write_csv(
             os.path.join(self.args.save_dir, "class_palette.csv"),
-            palette_rows(self.class_names),
-            ["class_id", "class_name", "color_r", "color_g", "color_b", "hex_color"],
+            palette_rows(self.class_names, self.display_class_names),
+            ["class_id", "class_name", "class_name_display", "color_r", "color_g", "color_b", "hex_color"],
         )
         np.savetxt(
             os.path.join(self.args.save_dir, "confusion_matrix.csv"),
@@ -274,15 +281,15 @@ class SegmentationEvaluator(object):
                 annot=True,
                 fmt=".2f",
                 cmap="Blues",
-                xticklabels=self.class_names[: self.nclass],
-                yticklabels=self.class_names[: self.nclass],
+                xticklabels=self.display_class_names[: self.nclass],
+                yticklabels=self.display_class_names[: self.nclass],
             )
         else:
             plt.imshow(normalized, cmap="Blues", interpolation="nearest")
             plt.colorbar(fraction=0.046, pad=0.04)
             tick_positions = np.arange(self.nclass)
-            plt.xticks(tick_positions, self.class_names[: self.nclass], rotation=45, ha="right")
-            plt.yticks(tick_positions, self.class_names[: self.nclass])
+            plt.xticks(tick_positions, self.display_class_names[: self.nclass], rotation=45, ha="right")
+            plt.yticks(tick_positions, self.display_class_names[: self.nclass])
         plt.title("Normalized Confusion Matrix")
         plt.xlabel("Predicted Label")
         plt.ylabel("Ground Truth")
@@ -292,7 +299,11 @@ class SegmentationEvaluator(object):
 
     def _save_visualizations(self, vis_samples):
         vis_dir = ensure_dir(os.path.join(self.args.save_dir, "visualizations"))
-        legend_figure = render_class_legend(self.class_names, title="Task Class Colors")
+        legend_figure = render_class_legend(
+            self.class_names,
+            title="Task Class Colors",
+            display_class_names=self.display_class_names,
+        )
         legend_figure.savefig(os.path.join(vis_dir, "class_legend.png"), dpi=200, bbox_inches="tight")
         plt.close(legend_figure)
 
@@ -308,7 +319,12 @@ class SegmentationEvaluator(object):
             diff_mask = np.where(gt_mask == pred_mask, 0, 255).astype(np.uint8)
             diff_colored = np.stack([diff_mask, np.zeros_like(diff_mask), np.zeros_like(diff_mask)], axis=2)
             present_class_ids = sorted({int(class_id) for class_id in np.unique(np.concatenate([gt_mask.ravel(), pred_mask.ravel()]))})
-            legend_fig = render_class_legend(self.class_names, present_class_ids=present_class_ids, title="Present Classes")
+            legend_fig = render_class_legend(
+                self.class_names,
+                present_class_ids=present_class_ids,
+                title="Present Classes",
+                display_class_names=self.display_class_names,
+            )
 
             fig, axes = plt.subplots(2, 4, figsize=(22, 12))
             panels = [
