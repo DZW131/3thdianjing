@@ -6,6 +6,7 @@ import time
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 
 from dataloaders import make_data_loader
@@ -177,6 +178,40 @@ class Trainer(object):
             if isinstance(module, (torch.nn.BatchNorm2d, SynchronizedBatchNorm2d)):
                 module.eval()
 
+    def _t_tubule_prior_scale(self, epoch):
+        base_weight = float(getattr(self.args, "t_tubule_prior_loss_weight", 0.0) or 0.0)
+        if base_weight <= 0:
+            return 0.0
+        warmup_epochs = int(getattr(self.args, "t_tubule_prior_warmup_epochs", 0) or 0)
+        if warmup_epochs <= 0:
+            return base_weight
+        return base_weight * min(1.0, float(epoch + 1) / float(warmup_epochs))
+
+    def _t_tubule_prior_loss(self, output, sample, epoch):
+        if not getattr(self.args, "enable_t_tubule_prior", False):
+            return output.new_tensor(0.0)
+        if "t_tubule_prior_label" not in sample or "t_tubule_prior_weight" not in sample:
+            return output.new_tensor(0.0)
+
+        target_class_id = getattr(self.args, "t_tubule_prior_target_class_id", None)
+        if target_class_id is None or target_class_id >= output.size(1):
+            return output.new_tensor(0.0)
+
+        scale = self._t_tubule_prior_scale(epoch)
+        if scale <= 0:
+            return output.new_tensor(0.0)
+
+        prior_label = sample["t_tubule_prior_label"].to(device=output.device, dtype=output.dtype)
+        prior_weight = sample["t_tubule_prior_weight"].to(device=output.device, dtype=output.dtype)
+        positive_weight = prior_weight * (prior_label > 0.5).to(dtype=output.dtype)
+        normalizer = positive_weight.sum()
+        if normalizer.item() <= 0:
+            return output.new_tensor(0.0)
+
+        log_probs = F.log_softmax(output, dim=1)
+        class_log_prob = log_probs[:, int(target_class_id), :, :]
+        return -scale * (class_log_prob * positive_weight).sum() / torch.clamp(normalizer, min=1.0)
+
     def training(self, epoch):
         train_loss = 0.0
         epoch_start = time.time()
@@ -202,7 +237,9 @@ class Trainer(object):
             self.scheduler(self.optimizer, i, epoch, max(0.0, self.best_pred))
             self.optimizer.zero_grad()
             output = self.model(image)
-            loss = self.criterion(output, target)
+            seg_loss = self.criterion(output, target)
+            prior_loss = self._t_tubule_prior_loss(output, sample, epoch)
+            loss = seg_loss + prior_loss
             loss.backward()
             self.optimizer.step()
 
@@ -214,6 +251,8 @@ class Trainer(object):
 
             global_step = i + num_batches * epoch
             self.writer.add_scalar("train/total_loss_iter", loss.item(), global_step)
+            if prior_loss.item() > 0:
+                self.writer.add_scalar("train/t_tubule_prior_loss_iter", prior_loss.item(), global_step)
 
             if i % vis_interval == 0:
                 self.summary.visualize_image(self.writer, self.args.dataset, image, target, output, global_step)
@@ -423,6 +462,18 @@ def build_parser():
     parser.add_argument("--quantify-original-classes", type=str, default=None, help="comma-separated original class ids used for image-level quantification")
     parser.add_argument("--label-dilate-original-classes", type=str, default=None, help="comma-separated original class ids to dilate on training masks")
     parser.add_argument("--label-dilate-radius", type=int, default=0, help="dilation radius for selected training labels")
+    parser.add_argument("--enable-t-tubule-prior", action="store_true", default=False, help="enable sarcomere T-tubule pseudo-line auxiliary supervision")
+    parser.add_argument("--t-tubule-prior-z-original-classes", type=str, default=None, help="original class ids used as Z-line anchors")
+    parser.add_argument("--t-tubule-prior-m-original-classes", type=str, default=None, help="original class ids used as M-line anchors")
+    parser.add_argument("--t-tubule-prior-target-original-class", type=str, default=None, help="original class id supervised by the pseudo-line prior")
+    parser.add_argument("--t-tubule-prior-loss-weight", type=float, default=0.0, help="maximum auxiliary prior loss weight")
+    parser.add_argument("--t-tubule-prior-warmup-epochs", type=int, default=0, help="epochs used to ramp the auxiliary prior loss")
+    parser.add_argument("--t-tubule-prior-line-radius", type=int, default=1, help="pixel dilation radius for generated pseudo-lines")
+    parser.add_argument("--t-tubule-prior-min-distance", type=float, default=8.0, help="minimum Z/M endpoint distance for a pseudo-line")
+    parser.add_argument("--t-tubule-prior-max-distance", type=float, default=384.0, help="maximum Z/M endpoint distance for a pseudo-line")
+    parser.add_argument("--t-tubule-prior-min-component-area", type=int, default=4, help="minimum Z/M component size used for endpoint extraction")
+    parser.add_argument("--t-tubule-prior-min-confidence", type=float, default=0.25, help="minimum local confidence for generated pseudo-lines")
+    parser.add_argument("--t-tubule-prior-exclude-non-background", type=bool, default=True, help="avoid adding prior pixels over non-background non-target labels")
     parser.add_argument("--train-vertical-flip", action="store_true", default=False, help="enable random vertical flip in training")
     parser.add_argument("--train-rotate-degree", type=float, default=0.0, help="small-angle random rotation for training")
     parser.add_argument("--sync-bn", type=bool, default=None, help="whether to use sync batch norm")

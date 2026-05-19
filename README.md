@@ -344,3 +344,74 @@ python evaluate.py \
 | v0.5 | mito_sr | `configs/mito_sr/mito_sr_v0_5_final200.json` | `final_200/train.txt` | `final_200/test.txt` | `outputs/eval/jijie_mito_sr_v0_5_final200` | no val |
 | v0.5 | sarcomere | `configs/sarcomere/sarcomere_v0_5_final200.json` | `final_200/train.txt` | `final_200/test.txt` | `outputs/eval/jijie_sarcomere_v0_5_final200` | no val |
 | v0.2 | mito | `configs/mito/mito_v0_2.json` | `default/train.txt` | `default/test.txt` | `outputs/eval/jijie_mito_v0_2` | baseline |
+
+## sarcomere v0.6 细长结构实验
+
+本分支新增了 3 个只针对 `sarcomere` 任务的实验配置，用来验证 Z 线、M 线、T 管这类细长、断续、边界模糊结构的训练增强方案。旧的 v0.5 配置默认不启用这些逻辑，因此原始训练和推理流程不会被污染。
+
+### 新增方案
+
+| Experiment | Config | Purpose |
+| --- | --- | --- |
+| dilation only | `configs/sarcomere/sarcomere_v0_6_dilate_only.json` | 训练阶段对 Z/M/T 管标签做轻微膨胀，增强细线监督信号 |
+| T prior only | `configs/sarcomere/sarcomere_v0_6_t_prior_only.json` | 根据 Z/M 线端点生成低权重 T 管伪线辅助监督 |
+| dilation + T prior | `configs/sarcomere/sarcomere_v0_6_dilate_t_prior.json` | 同时启用标签膨胀和 T 管结构先验 |
+
+T 管结构先验只在训练阶段生效：代码会在训练 mask 中提取 Z 线、M 线连通域端点，生成候选连接线，并以 `t_tubule_prior_loss_weight` 控制辅助监督强度。默认采用 warm-up，前 20 个 epoch 从 0 逐步增加到最大权重 0.2。评估和测试仍然使用原始标注 mask。
+
+### 服务器启动方式
+
+建议在服务器单独 clone 本分支，避免覆盖旧的 baseline 目录：
+
+```bash
+git clone -b codex/sarcomere-structure-prior https://github.com/DZW131/3thdianjing.git 3thdianjing_sarcomere_prior
+cd 3thdianjing_sarcomere_prior
+conda activate dianjing
+```
+
+复用已有数据时，保证以下目录存在：
+
+```text
+data/jijie/JPEGImages
+data/jijie/SegmentationClass
+data/jijie/ImageSets/Segmentation/tasks
+```
+
+如需软链接旧数据：
+
+```bash
+rm -rf data/jijie
+ln -s /root/3thdianjing/data/jijie data/jijie
+```
+
+启动三组消融实验：
+
+```bash
+python train.py --config configs/sarcomere/sarcomere_v0_6_dilate_only.json --gpu-ids 0 --workers 2
+python train.py --config configs/sarcomere/sarcomere_v0_6_t_prior_only.json --gpu-ids 0 --workers 2
+python train.py --config configs/sarcomere/sarcomere_v0_6_dilate_t_prior.json --gpu-ids 0 --workers 2
+```
+
+训练完成后评估：
+
+```bash
+python evaluate.py \
+  --config configs/sarcomere/sarcomere_v0_6_dilate_only.json \
+  --split test \
+  --resume run/jijie/jijie_sarcomere_v0_6_dilate_only/model_best.pth.tar \
+  --save-dir outputs/eval/jijie_sarcomere_v0_6_dilate_only
+
+python evaluate.py \
+  --config configs/sarcomere/sarcomere_v0_6_t_prior_only.json \
+  --split test \
+  --resume run/jijie/jijie_sarcomere_v0_6_t_prior_only/model_best.pth.tar \
+  --save-dir outputs/eval/jijie_sarcomere_v0_6_t_prior_only
+
+python evaluate.py \
+  --config configs/sarcomere/sarcomere_v0_6_dilate_t_prior.json \
+  --split test \
+  --resume run/jijie/jijie_sarcomere_v0_6_dilate_t_prior/model_best.pth.tar \
+  --save-dir outputs/eval/jijie_sarcomere_v0_6_dilate_t_prior
+```
+
+建议优先比较 `per_class_metrics.csv` 中 T 管、Z 线、M 线的 IoU/Dice/Recall，以及 `visualizations/*_composite.png` 中细长结构连续性和假阳性变化。

@@ -79,6 +79,28 @@ def _resolve_remapped_ids(selected_classes, original_class_ids):
     return remapped or None
 
 
+def _resolve_single_remapped_id(selected_classes, original_class_id):
+    values = _coerce_int_list(original_class_id)
+    if not values:
+        return None
+    remapped = _resolve_remapped_ids(selected_classes, [values[0]])
+    if remapped:
+        return remapped[0]
+    if not selected_classes:
+        return values[0]
+    return None
+
+
+def _coerce_bool(value):
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
 def finalize_jijie_args(args):
     if getattr(args, "dataset", None) != "jijie":
         return args
@@ -89,6 +111,15 @@ def finalize_jijie_args(args):
     args.metric_target_original_classes = _coerce_int_list(getattr(args, "metric_target_original_classes", None))
     args.quantify_original_classes = _coerce_int_list(getattr(args, "quantify_original_classes", None))
     args.label_dilate_original_classes = _coerce_int_list(getattr(args, "label_dilate_original_classes", None))
+    args.t_tubule_prior_z_original_classes = _coerce_int_list(
+        getattr(args, "t_tubule_prior_z_original_classes", None)
+    )
+    args.t_tubule_prior_m_original_classes = _coerce_int_list(
+        getattr(args, "t_tubule_prior_m_original_classes", None)
+    )
+    args.t_tubule_prior_target_original_class = _coerce_int_list(
+        getattr(args, "t_tubule_prior_target_original_class", None)
+    )
 
     if getattr(args, "manifest_dir", None):
         args.manifest_dir = _resolve_path(args.manifest_dir)
@@ -122,6 +153,22 @@ def finalize_jijie_args(args):
         args.selected_classes,
         args.label_dilate_original_classes,
     )
+    args.enable_t_tubule_prior = _coerce_bool(getattr(args, "enable_t_tubule_prior", False))
+    args.t_tubule_prior_z_class_ids = _resolve_remapped_ids(
+        args.selected_classes,
+        args.t_tubule_prior_z_original_classes or [10],
+    )
+    args.t_tubule_prior_m_class_ids = _resolve_remapped_ids(
+        args.selected_classes,
+        args.t_tubule_prior_m_original_classes or [12],
+    )
+    args.t_tubule_prior_target_class_id = _resolve_single_remapped_id(
+        args.selected_classes,
+        args.t_tubule_prior_target_original_class or [11],
+    )
+    if args.enable_t_tubule_prior and args.t_tubule_prior_target_class_id is None:
+        print("[Task] T-tubule prior disabled because target class is not in selected_classes.")
+        args.enable_t_tubule_prior = False
 
     if args.selected_classes:
         args.selected_class_names = [CLASS_NAMES[class_id] for class_id in args.selected_classes]
@@ -141,7 +188,7 @@ def finalize_jijie_args(args):
 def summarize_jijie_run(args):
     selected_classes = ",".join(str(class_id) for class_id in (args.selected_classes or [])) or "all"
     metric_targets = ",".join(str(class_id) for class_id in (args.metric_target_class_ids or [])) or "all"
-    return [
+    lines = [
         "[Task] task={} display={} selected_classes={} metric_targets={}".format(
             getattr(args, "task_name", "default"),
             getattr(args, "task_display_name", getattr(args, "task_name", "default")),
@@ -160,3 +207,14 @@ def summarize_jijie_run(args):
             getattr(args, "config", None) or "none",
         ),
     ]
+    if getattr(args, "enable_t_tubule_prior", False):
+        lines.append(
+            "[Task] t_tubule_prior=on target={} z_classes={} m_classes={} weight={} warmup={}".format(
+                getattr(args, "t_tubule_prior_target_class_id", None),
+                getattr(args, "t_tubule_prior_z_class_ids", None),
+                getattr(args, "t_tubule_prior_m_class_ids", None),
+                getattr(args, "t_tubule_prior_loss_weight", 0.0),
+                getattr(args, "t_tubule_prior_warmup_epochs", 0),
+            )
+        )
+    return lines
