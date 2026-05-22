@@ -120,6 +120,15 @@ def finalize_jijie_args(args):
     args.t_tubule_prior_target_original_class = _coerce_int_list(
         getattr(args, "t_tubule_prior_target_original_class", None)
     )
+    args.side_tubule_prior_z_original_classes = _coerce_int_list(
+        getattr(args, "side_tubule_prior_z_original_classes", None)
+    )
+    args.side_tubule_prior_m_original_classes = _coerce_int_list(
+        getattr(args, "side_tubule_prior_m_original_classes", None)
+    )
+    args.side_tubule_prior_target_original_class = _coerce_int_list(
+        getattr(args, "side_tubule_prior_target_original_class", None)
+    )
 
     if getattr(args, "manifest_dir", None):
         args.manifest_dir = _resolve_path(args.manifest_dir)
@@ -170,6 +179,23 @@ def finalize_jijie_args(args):
         print("[Task] T-tubule prior disabled because target class is not in selected_classes.")
         args.enable_t_tubule_prior = False
 
+    args.enable_side_tubule_prior = _coerce_bool(getattr(args, "enable_side_tubule_prior", False))
+    args.side_tubule_prior_z_class_ids = _resolve_remapped_ids(
+        args.selected_classes,
+        args.side_tubule_prior_z_original_classes or [10],
+    )
+    args.side_tubule_prior_m_class_ids = _resolve_remapped_ids(
+        args.selected_classes,
+        args.side_tubule_prior_m_original_classes or [12],
+    )
+    args.side_tubule_prior_target_class_id = _resolve_single_remapped_id(
+        args.selected_classes,
+        args.side_tubule_prior_target_original_class or [13],
+    )
+    if args.enable_side_tubule_prior and args.side_tubule_prior_target_class_id is None:
+        print("[Task] side-tubule prior disabled because target class is not in selected_classes.")
+        args.enable_side_tubule_prior = False
+
     if args.selected_classes:
         args.selected_class_names = [CLASS_NAMES[class_id] for class_id in args.selected_classes]
     else:
@@ -215,6 +241,16 @@ def summarize_jijie_run(args):
                 getattr(args, "t_tubule_prior_m_class_ids", None),
                 getattr(args, "t_tubule_prior_loss_weight", 0.0),
                 getattr(args, "t_tubule_prior_warmup_epochs", 0),
+            )
+        )
+    if getattr(args, "enable_side_tubule_prior", False):
+        lines.append(
+            "[Task] side_tubule_prior=on target={} z_classes={} m_classes={} weight={} warmup={}".format(
+                getattr(args, "side_tubule_prior_target_class_id", None),
+                getattr(args, "side_tubule_prior_z_class_ids", None),
+                getattr(args, "side_tubule_prior_m_class_ids", None),
+                getattr(args, "side_tubule_prior_loss_weight", 0.0),
+                getattr(args, "side_tubule_prior_warmup_epochs", 0),
             )
         )
     return lines

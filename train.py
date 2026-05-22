@@ -178,31 +178,42 @@ class Trainer(object):
             if isinstance(module, (torch.nn.BatchNorm2d, SynchronizedBatchNorm2d)):
                 module.eval()
 
-    def _t_tubule_prior_scale(self, epoch):
-        base_weight = float(getattr(self.args, "t_tubule_prior_loss_weight", 0.0) or 0.0)
+    def _prior_scale(self, epoch, weight_attr, warmup_attr):
+        base_weight = float(getattr(self.args, weight_attr, 0.0) or 0.0)
         if base_weight <= 0:
             return 0.0
-        warmup_epochs = int(getattr(self.args, "t_tubule_prior_warmup_epochs", 0) or 0)
+        warmup_epochs = int(getattr(self.args, warmup_attr, 0) or 0)
         if warmup_epochs <= 0:
             return base_weight
         return base_weight * min(1.0, float(epoch + 1) / float(warmup_epochs))
 
-    def _t_tubule_prior_loss(self, output, sample, epoch):
-        if not getattr(self.args, "enable_t_tubule_prior", False):
+    def _auxiliary_prior_loss(
+        self,
+        output,
+        sample,
+        epoch,
+        enabled_attr,
+        target_class_attr,
+        label_key,
+        weight_key,
+        loss_weight_attr,
+        warmup_attr,
+    ):
+        if not getattr(self.args, enabled_attr, False):
             return output.new_tensor(0.0)
-        if "t_tubule_prior_label" not in sample or "t_tubule_prior_weight" not in sample:
+        if label_key not in sample or weight_key not in sample:
             return output.new_tensor(0.0)
 
-        target_class_id = getattr(self.args, "t_tubule_prior_target_class_id", None)
+        target_class_id = getattr(self.args, target_class_attr, None)
         if target_class_id is None or target_class_id >= output.size(1):
             return output.new_tensor(0.0)
 
-        scale = self._t_tubule_prior_scale(epoch)
+        scale = self._prior_scale(epoch, loss_weight_attr, warmup_attr)
         if scale <= 0:
             return output.new_tensor(0.0)
 
-        prior_label = sample["t_tubule_prior_label"].to(device=output.device, dtype=output.dtype)
-        prior_weight = sample["t_tubule_prior_weight"].to(device=output.device, dtype=output.dtype)
+        prior_label = sample[label_key].to(device=output.device, dtype=output.dtype)
+        prior_weight = sample[weight_key].to(device=output.device, dtype=output.dtype)
         positive_weight = prior_weight * (prior_label > 0.5).to(dtype=output.dtype)
         normalizer = positive_weight.sum()
         if normalizer.item() <= 0:
@@ -211,6 +222,32 @@ class Trainer(object):
         log_probs = F.log_softmax(output, dim=1)
         class_log_prob = log_probs[:, int(target_class_id), :, :]
         return -scale * (class_log_prob * positive_weight).sum() / torch.clamp(normalizer, min=1.0)
+
+    def _t_tubule_prior_loss(self, output, sample, epoch):
+        return self._auxiliary_prior_loss(
+            output,
+            sample,
+            epoch,
+            enabled_attr="enable_t_tubule_prior",
+            target_class_attr="t_tubule_prior_target_class_id",
+            label_key="t_tubule_prior_label",
+            weight_key="t_tubule_prior_weight",
+            loss_weight_attr="t_tubule_prior_loss_weight",
+            warmup_attr="t_tubule_prior_warmup_epochs",
+        )
+
+    def _side_tubule_prior_loss(self, output, sample, epoch):
+        return self._auxiliary_prior_loss(
+            output,
+            sample,
+            epoch,
+            enabled_attr="enable_side_tubule_prior",
+            target_class_attr="side_tubule_prior_target_class_id",
+            label_key="side_tubule_prior_label",
+            weight_key="side_tubule_prior_weight",
+            loss_weight_attr="side_tubule_prior_loss_weight",
+            warmup_attr="side_tubule_prior_warmup_epochs",
+        )
 
     def training(self, epoch):
         train_loss = 0.0
@@ -238,7 +275,9 @@ class Trainer(object):
             self.optimizer.zero_grad()
             output = self.model(image)
             seg_loss = self.criterion(output, target)
-            prior_loss = self._t_tubule_prior_loss(output, sample, epoch)
+            t_tubule_prior_loss = self._t_tubule_prior_loss(output, sample, epoch)
+            side_tubule_prior_loss = self._side_tubule_prior_loss(output, sample, epoch)
+            prior_loss = t_tubule_prior_loss + side_tubule_prior_loss
             loss = seg_loss + prior_loss
             loss.backward()
             self.optimizer.step()
@@ -251,8 +290,10 @@ class Trainer(object):
 
             global_step = i + num_batches * epoch
             self.writer.add_scalar("train/total_loss_iter", loss.item(), global_step)
-            if prior_loss.item() > 0:
-                self.writer.add_scalar("train/t_tubule_prior_loss_iter", prior_loss.item(), global_step)
+            if t_tubule_prior_loss.item() > 0:
+                self.writer.add_scalar("train/t_tubule_prior_loss_iter", t_tubule_prior_loss.item(), global_step)
+            if side_tubule_prior_loss.item() > 0:
+                self.writer.add_scalar("train/side_tubule_prior_loss_iter", side_tubule_prior_loss.item(), global_step)
 
             if i % vis_interval == 0:
                 self.summary.visualize_image(self.writer, self.args.dataset, image, target, output, global_step)

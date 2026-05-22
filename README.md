@@ -347,17 +347,25 @@ python evaluate.py \
 
 ## sarcomere v0.6 细长结构实验
 
-本分支新增了 3 个只针对 `sarcomere` 任务的实验配置，用来验证 Z 线、M 线、T 管这类细长、断续、边界模糊结构的训练增强方案。旧的 v0.5 配置默认不启用这些逻辑，因此原始训练和推理流程不会被污染。
+本分支新增了 3 个只针对 `sarcomere` 任务的实验配置，用来验证 Z 线、M 线和心肌侧管这类细长、断续、边界模糊结构的训练增强方案。旧的 v0.5 配置默认不启用这些逻辑，因此原始训练和推理流程不会被污染。
+
+### 结构约定
+
+- Z 线和 M 线是肌节几何测量的主要锚点，后续肌节长度、形状和排列指标主要依赖它们的端点与相邻关系。
+- T 管是单独类别，本轮实验先不对 T 管做膨胀，也不生成 T 管伪标签。
+- 心肌侧管是单独类别，Z/M 端点连接线只作为低权重的心肌侧管候选先验，不能监督到 T 管类别。
 
 ### 新增方案
 
 | Experiment | Config | Purpose |
 | --- | --- | --- |
-| dilation only | `configs/sarcomere/sarcomere_v0_6_dilate_only.json` | 训练阶段对 Z/M/T 管标签做轻微膨胀，增强细线监督信号 |
-| T prior only | `configs/sarcomere/sarcomere_v0_6_t_prior_only.json` | 根据 Z/M 线端点生成低权重 T 管伪线辅助监督 |
-| dilation + T prior | `configs/sarcomere/sarcomere_v0_6_dilate_t_prior.json` | 同时启用标签膨胀和 T 管结构先验 |
+| Z/M/side dilation only | `configs/sarcomere/sarcomere_v0_6_zm_side_dilate_only.json` | 训练阶段只对 Z 线、M 线、心肌侧管做 1 像素轻微膨胀，不处理 T 管 |
+| side prior only | `configs/sarcomere/sarcomere_v0_6_side_prior_only.json` | 根据 Z/M 线端点生成低权重心肌侧管候选线辅助监督 |
+| dilation + side prior | `configs/sarcomere/sarcomere_v0_6_zm_side_dilate_side_prior.json` | 同时启用 Z/M/侧管标签膨胀和心肌侧管结构先验 |
 
-T 管结构先验只在训练阶段生效：代码会在训练 mask 中提取 Z 线、M 线连通域端点，生成候选连接线，并以 `t_tubule_prior_loss_weight` 控制辅助监督强度。默认采用 warm-up，前 20 个 epoch 从 0 逐步增加到最大权重 0.2。评估和测试仍然使用原始标注 mask。
+心肌侧管结构先验只在训练阶段生效：代码会在训练 mask 中提取 Z 线、M 线连通域端点，生成候选连接线，并以 `side_tubule_prior_loss_weight` 控制辅助监督强度。默认采用 warm-up，前 20 个 epoch 从 0 逐步增加到最大权重 0.2。候选线默认只落在背景或已有心肌侧管区域，不覆盖 Z 线、M 线和 T 管标注；评估和测试仍然使用原始标注 mask。
+
+早期的 `sarcomere_v0_6_t_prior_only.json` 和 `sarcomere_v0_6_dilate_t_prior.json` 文件名保留为兼容入口，但内部已经改为心肌侧管先验，并关闭 T 管先验。新实验建议优先使用上表中的显式配置名。
 
 ### 服务器启动方式
 
@@ -387,31 +395,31 @@ ln -s /root/3thdianjing/data/jijie data/jijie
 启动三组消融实验：
 
 ```bash
-python train.py --config configs/sarcomere/sarcomere_v0_6_dilate_only.json --gpu-ids 0 --workers 2
-python train.py --config configs/sarcomere/sarcomere_v0_6_t_prior_only.json --gpu-ids 0 --workers 2
-python train.py --config configs/sarcomere/sarcomere_v0_6_dilate_t_prior.json --gpu-ids 0 --workers 2
+python train.py --config configs/sarcomere/sarcomere_v0_6_zm_side_dilate_only.json --gpu-ids 0 --workers 2
+python train.py --config configs/sarcomere/sarcomere_v0_6_side_prior_only.json --gpu-ids 0 --workers 2
+python train.py --config configs/sarcomere/sarcomere_v0_6_zm_side_dilate_side_prior.json --gpu-ids 0 --workers 2
 ```
 
 训练完成后评估：
 
 ```bash
 python evaluate.py \
-  --config configs/sarcomere/sarcomere_v0_6_dilate_only.json \
+  --config configs/sarcomere/sarcomere_v0_6_zm_side_dilate_only.json \
   --split test \
-  --resume run/jijie/jijie_sarcomere_v0_6_dilate_only/model_best.pth.tar \
-  --save-dir outputs/eval/jijie_sarcomere_v0_6_dilate_only
+  --resume run/jijie/jijie_sarcomere_v0_6_zm_side_dilate_only/model_best.pth.tar \
+  --save-dir outputs/eval/jijie_sarcomere_v0_6_zm_side_dilate_only
 
 python evaluate.py \
-  --config configs/sarcomere/sarcomere_v0_6_t_prior_only.json \
+  --config configs/sarcomere/sarcomere_v0_6_side_prior_only.json \
   --split test \
-  --resume run/jijie/jijie_sarcomere_v0_6_t_prior_only/model_best.pth.tar \
-  --save-dir outputs/eval/jijie_sarcomere_v0_6_t_prior_only
+  --resume run/jijie/jijie_sarcomere_v0_6_side_prior_only/model_best.pth.tar \
+  --save-dir outputs/eval/jijie_sarcomere_v0_6_side_prior_only
 
 python evaluate.py \
-  --config configs/sarcomere/sarcomere_v0_6_dilate_t_prior.json \
+  --config configs/sarcomere/sarcomere_v0_6_zm_side_dilate_side_prior.json \
   --split test \
-  --resume run/jijie/jijie_sarcomere_v0_6_dilate_t_prior/model_best.pth.tar \
-  --save-dir outputs/eval/jijie_sarcomere_v0_6_dilate_t_prior
+  --resume run/jijie/jijie_sarcomere_v0_6_zm_side_dilate_side_prior/model_best.pth.tar \
+  --save-dir outputs/eval/jijie_sarcomere_v0_6_zm_side_dilate_side_prior
 ```
 
-建议优先比较 `per_class_metrics.csv` 中 T 管、Z 线、M 线的 IoU/Dice/Recall，以及 `visualizations/*_composite.png` 中细长结构连续性和假阳性变化。
+建议优先比较 `per_class_metrics.csv` 中 Z 线、M 线、心肌侧管的 IoU/Dice/Recall，并额外观察 T 管的假阳性是否下降；可视化重点看 `visualizations/*_composite.png` 中细长结构连续性和误分到 T 管的情况。

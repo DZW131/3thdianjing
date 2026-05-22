@@ -9,7 +9,7 @@ from torchvision import transforms
 
 from dataloaders import custom_transforms as tr
 from mypath import Path
-from utils.jijie.sarcomere_prior import AddTTubulePrior
+from utils.jijie.sarcomere_prior import AddSideTubulePrior, AddTTubulePrior
 from utils.jijie.tasks import CLASS_NAMES
 
 
@@ -209,6 +209,21 @@ class JijieSegmentation(Dataset):
             exclude_non_background=getattr(self.args, "t_tubule_prior_exclude_non_background", True),
         )
 
+    def _build_optional_side_tubule_prior(self):
+        if not getattr(self.args, "enable_side_tubule_prior", False):
+            return None
+        return AddSideTubulePrior(
+            z_class_ids=getattr(self.args, "side_tubule_prior_z_class_ids", None),
+            m_class_ids=getattr(self.args, "side_tubule_prior_m_class_ids", None),
+            target_class_id=getattr(self.args, "side_tubule_prior_target_class_id", None),
+            line_radius=getattr(self.args, "side_tubule_prior_line_radius", 1),
+            min_distance=getattr(self.args, "side_tubule_prior_min_distance", 8),
+            max_distance=getattr(self.args, "side_tubule_prior_max_distance", 384),
+            min_component_area=getattr(self.args, "side_tubule_prior_min_component_area", 4),
+            min_confidence=getattr(self.args, "side_tubule_prior_min_confidence", 0.25),
+            exclude_non_background=getattr(self.args, "side_tubule_prior_exclude_non_background", True),
+        )
+
     def transform_tr(self, sample):
         transforms_list = [
             tr.RandomHorizontalFlip(),
@@ -236,6 +251,9 @@ class JijieSegmentation(Dataset):
         prior_transform = self._build_optional_t_tubule_prior()
         if prior_transform is not None:
             transforms_list.append(prior_transform)
+        side_prior_transform = self._build_optional_side_tubule_prior()
+        if side_prior_transform is not None:
+            transforms_list.append(side_prior_transform)
         return transforms.Compose(transforms_list)(sample)
 
     def transform_val(self, sample):

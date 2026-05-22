@@ -21,7 +21,6 @@
   "sliding_window_stride": 512,
   "label_dilate_original_classes": "10,12,13",
   "label_dilate_radius": 1,
-  "enable_t_tubule_prior": false,
   "enable_side_tubule_prior": true,
   "side_tubule_prior_z_original_classes": "10",
   "side_tubule_prior_m_original_classes": "12",

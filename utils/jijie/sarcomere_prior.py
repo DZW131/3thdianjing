@@ -70,10 +70,10 @@ def _draw_confidence_line(weight_map, start, end, confidence, radius=1):
     weight_map[line_mask] = np.maximum(weight_map[line_mask], float(confidence))
 
 
-def generate_t_tubule_prior(
+def generate_endpoint_bridge_prior(
     mask,
-    z_class_ids,
-    m_class_ids,
+    first_anchor_class_ids,
+    second_anchor_class_ids,
     target_class_id,
     line_radius=1,
     min_distance=8,
@@ -82,43 +82,46 @@ def generate_t_tubule_prior(
     min_confidence=0.25,
     exclude_non_background=True,
 ):
-    """Build a soft T-tubule candidate band from Z/M component endpoints."""
+    """Build a soft candidate band between two anchor structures."""
     mask = np.asarray(mask).astype(np.int64)
     weight_map = np.zeros(mask.shape, dtype=np.float32)
 
     if target_class_id is None:
         return np.zeros(mask.shape, dtype=np.float32), weight_map
 
-    z_endpoints = _component_endpoints(mask, z_class_ids, min_component_area=min_component_area)
-    m_endpoints = _component_endpoints(mask, m_class_ids, min_component_area=min_component_area)
-    if not z_endpoints or not m_endpoints:
+    first_endpoints = _component_endpoints(mask, first_anchor_class_ids, min_component_area=min_component_area)
+    second_endpoints = _component_endpoints(mask, second_anchor_class_ids, min_component_area=min_component_area)
+    if not first_endpoints or not second_endpoints:
         return np.zeros(mask.shape, dtype=np.float32), weight_map
 
-    m_array = np.asarray(m_endpoints, dtype=np.float64)
+    second_array = np.asarray(second_endpoints, dtype=np.float64)
     used_pairs = set()
     min_distance = float(min_distance)
     max_distance = float(max_distance)
     confidence_span = max(1.0, max_distance - min_distance)
 
-    for z_point in z_endpoints:
-        z_array = np.asarray(z_point, dtype=np.float64)
-        distances = np.sqrt(np.sum((m_array - z_array) ** 2, axis=1))
+    for first_point in first_endpoints:
+        first_array = np.asarray(first_point, dtype=np.float64)
+        distances = np.sqrt(np.sum((second_array - first_array) ** 2, axis=1))
         if distances.size == 0:
             continue
 
-        for m_index in np.argsort(distances):
-            distance = float(distances[m_index])
+        for second_index in np.argsort(distances):
+            distance = float(distances[second_index])
             if distance < min_distance or distance > max_distance:
                 continue
-            pair_key = (tuple(int(v) for v in z_point), tuple(int(v) for v in m_endpoints[int(m_index)]))
+            pair_key = (
+                tuple(int(v) for v in first_point),
+                tuple(int(v) for v in second_endpoints[int(second_index)]),
+            )
             if pair_key in used_pairs:
                 continue
             used_pairs.add(pair_key)
             confidence = min_confidence + (1.0 - min_confidence) * ((max_distance - distance) / confidence_span)
             _draw_confidence_line(
                 weight_map,
-                z_point,
-                m_endpoints[int(m_index)],
+                first_point,
+                second_endpoints[int(second_index)],
                 confidence=max(min_confidence, min(1.0, confidence)),
                 radius=line_radius,
             )
@@ -132,12 +135,67 @@ def generate_t_tubule_prior(
     return prior_mask, weight_map.astype(np.float32)
 
 
-class AddTTubulePrior(object):
+def generate_side_tubule_prior(
+    mask,
+    z_class_ids,
+    m_class_ids,
+    target_class_id,
+    line_radius=1,
+    min_distance=8,
+    max_distance=384,
+    min_component_area=4,
+    min_confidence=0.25,
+    exclude_non_background=True,
+):
+    """Build a soft side-tubule candidate band from Z/M component endpoints."""
+    return generate_endpoint_bridge_prior(
+        mask,
+        first_anchor_class_ids=z_class_ids,
+        second_anchor_class_ids=m_class_ids,
+        target_class_id=target_class_id,
+        line_radius=line_radius,
+        min_distance=min_distance,
+        max_distance=max_distance,
+        min_component_area=min_component_area,
+        min_confidence=min_confidence,
+        exclude_non_background=exclude_non_background,
+    )
+
+
+def generate_t_tubule_prior(
+    mask,
+    z_class_ids,
+    m_class_ids,
+    target_class_id,
+    line_radius=1,
+    min_distance=8,
+    max_distance=384,
+    min_component_area=4,
+    min_confidence=0.25,
+    exclude_non_background=True,
+):
+    """Backward-compatible wrapper for older experimental configs."""
+    return generate_endpoint_bridge_prior(
+        mask,
+        first_anchor_class_ids=z_class_ids,
+        second_anchor_class_ids=m_class_ids,
+        target_class_id=target_class_id,
+        line_radius=line_radius,
+        min_distance=min_distance,
+        max_distance=max_distance,
+        min_component_area=min_component_area,
+        min_confidence=min_confidence,
+        exclude_non_background=exclude_non_background,
+    )
+
+
+class AddEndpointBridgePrior(object):
     def __init__(
         self,
-        z_class_ids,
-        m_class_ids,
+        first_anchor_class_ids,
+        second_anchor_class_ids,
         target_class_id,
+        sample_key_prefix,
         line_radius=1,
         min_distance=8,
         max_distance=384,
@@ -145,9 +203,10 @@ class AddTTubulePrior(object):
         min_confidence=0.25,
         exclude_non_background=True,
     ):
-        self.z_class_ids = _normalize_class_ids(z_class_ids)
-        self.m_class_ids = _normalize_class_ids(m_class_ids)
+        self.first_anchor_class_ids = _normalize_class_ids(first_anchor_class_ids)
+        self.second_anchor_class_ids = _normalize_class_ids(second_anchor_class_ids)
         self.target_class_id = None if target_class_id is None else int(target_class_id)
+        self.sample_key_prefix = str(sample_key_prefix)
         self.line_radius = int(line_radius)
         self.min_distance = float(min_distance)
         self.max_distance = float(max_distance)
@@ -162,10 +221,10 @@ class AddTTubulePrior(object):
         else:
             label_array = np.asarray(label)
 
-        prior_mask, weight_map = generate_t_tubule_prior(
+        prior_mask, weight_map = generate_endpoint_bridge_prior(
             label_array,
-            z_class_ids=self.z_class_ids,
-            m_class_ids=self.m_class_ids,
+            first_anchor_class_ids=self.first_anchor_class_ids,
+            second_anchor_class_ids=self.second_anchor_class_ids,
             target_class_id=self.target_class_id,
             line_radius=self.line_radius,
             min_distance=self.min_distance,
@@ -176,6 +235,60 @@ class AddTTubulePrior(object):
         )
 
         updated = dict(sample)
-        updated["t_tubule_prior_label"] = torch.from_numpy(prior_mask).float()
-        updated["t_tubule_prior_weight"] = torch.from_numpy(weight_map).float()
+        updated[self.sample_key_prefix + "_label"] = torch.from_numpy(prior_mask).float()
+        updated[self.sample_key_prefix + "_weight"] = torch.from_numpy(weight_map).float()
         return updated
+
+
+class AddSideTubulePrior(AddEndpointBridgePrior):
+    def __init__(
+        self,
+        z_class_ids,
+        m_class_ids,
+        target_class_id,
+        line_radius=1,
+        min_distance=8,
+        max_distance=384,
+        min_component_area=4,
+        min_confidence=0.25,
+        exclude_non_background=True,
+    ):
+        super().__init__(
+            first_anchor_class_ids=z_class_ids,
+            second_anchor_class_ids=m_class_ids,
+            target_class_id=target_class_id,
+            sample_key_prefix="side_tubule_prior",
+            line_radius=line_radius,
+            min_distance=min_distance,
+            max_distance=max_distance,
+            min_component_area=min_component_area,
+            min_confidence=min_confidence,
+            exclude_non_background=exclude_non_background,
+        )
+
+
+class AddTTubulePrior(AddEndpointBridgePrior):
+    def __init__(
+        self,
+        z_class_ids,
+        m_class_ids,
+        target_class_id,
+        line_radius=1,
+        min_distance=8,
+        max_distance=384,
+        min_component_area=4,
+        min_confidence=0.25,
+        exclude_non_background=True,
+    ):
+        super().__init__(
+            first_anchor_class_ids=z_class_ids,
+            second_anchor_class_ids=m_class_ids,
+            target_class_id=target_class_id,
+            sample_key_prefix="t_tubule_prior",
+            line_radius=line_radius,
+            min_distance=min_distance,
+            max_distance=max_distance,
+            min_component_area=min_component_area,
+            min_confidence=min_confidence,
+            exclude_non_background=exclude_non_background,
+        )

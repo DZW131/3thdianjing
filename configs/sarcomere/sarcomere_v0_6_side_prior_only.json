@@ -1,7 +1,7 @@
 {
   "dataset": "jijie",
   "task_name": "sarcomere",
-  "task_display_name": "sarcomere Z/M/side dilation plus side-tubule prior",
+  "task_display_name": "sarcomere side-tubule prior only",
   "selected_classes": "10,11,12,13",
   "metric_target_original_classes": "10,12",
   "quantify_original_classes": "10,12",
@@ -19,9 +19,8 @@
   "inference_mode": "sliding",
   "sliding_window_size": 1024,
   "sliding_window_stride": 512,
-  "label_dilate_original_classes": "10,12,13",
-  "label_dilate_radius": 1,
-  "enable_t_tubule_prior": false,
+  "label_dilate_original_classes": "",
+  "label_dilate_radius": 0,
   "enable_side_tubule_prior": true,
   "side_tubule_prior_z_original_classes": "10",
   "side_tubule_prior_m_original_classes": "12",
@@ -35,5 +34,5 @@
   "side_tubule_prior_min_confidence": 0.25,
   "side_tubule_prior_exclude_non_background": true,
   "no_val": true,
-  "checkname": "jijie_sarcomere_v0_6_zm_side_dilate_side_prior"
+  "checkname": "jijie_sarcomere_v0_6_side_prior_only"
 }
