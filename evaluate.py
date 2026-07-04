@@ -23,6 +23,7 @@ from utils.jijie.inference import predict_logits
 from utils.jijie.partial_label_metrics import aggregate_gt_overlap_rows, compute_gt_overlap_rows
 from utils.jijie.postprocess import postprocess_mito_mask, DEFAULT_CLASSIFIER_PATH
 from utils.jijie.quantify import quantify_task_prediction
+from utils.jijie.scale_bar import resolve_um_per_pixel
 from utils.jijie.visualization import (
     blend_mask,
     colorize_mask,
@@ -258,6 +259,13 @@ class SegmentationEvaluator(object):
                     batch_size = pred_np.shape[0]
                     for batch_index in range(batch_size):
                         sample_id = sample.get("sample_id", ["sample"])[batch_index]
+                        sample_um_per_pixel = self.args.um_per_pixel
+                        scale_bar_info = None
+                        if self.args.auto_scale_bar:
+                            gray_for_scale = self._load_gray_image(sample, batch_index)
+                            if gray_for_scale is not None:
+                                sample_um_per_pixel, scale_bar_info = resolve_um_per_pixel(
+                                    self.args, gray_image=gray_for_scale)
                         image_summary, sample_object_rows, sample_detection_rows, sample_class_rows = quantify_task_prediction(
                             task_name=getattr(self.args, "task_name", "jijie"),
                             gt_mask=target_np[batch_index].astype(np.int32),
@@ -265,9 +273,15 @@ class SegmentationEvaluator(object):
                             class_names=self.class_names,
                             quantify_class_ids=self.args.quantify_class_ids,
                             sample_id=sample_id,
-                            um_per_pixel=self.args.um_per_pixel,
+                            um_per_pixel=sample_um_per_pixel,
                             return_class_rows=True,
                         )
+                        if scale_bar_info is not None:
+                            image_summary["scale_bar_px"] = scale_bar_info["width"]
+                            image_summary["scale_bar_um"] = scale_bar_info["scale_bar_um"]
+                            image_summary["um_per_pixel"] = scale_bar_info["um_per_pixel"]
+                        elif sample_um_per_pixel is not None:
+                            image_summary["um_per_pixel"] = sample_um_per_pixel
                         image_rows.append(image_summary)
                         object_rows.extend(sample_object_rows)
                         detection_rows.extend(sample_detection_rows)
@@ -301,6 +315,19 @@ class SegmentationEvaluator(object):
             }
             print("[Postprocess] unified {} instances, refined {} instances across {} images".format(
                 unified_total, refined_total, len(postprocess_stats)))
+        if self.args.auto_scale_bar and image_rows:
+            scale_rows = [r for r in image_rows if r.get("scale_bar_px") is not None]
+            umpp_values = [r.get("um_per_pixel") for r in image_rows if r.get("um_per_pixel") is not None]
+            summary["scale_bar"] = {
+                "auto_detected": len(scale_rows),
+                "total_images": len(image_rows),
+                "mean_um_per_pixel": float(np.mean(umpp_values)) if umpp_values else None,
+                "std_um_per_pixel": float(np.std(umpp_values)) if umpp_values else None,
+            }
+            if scale_rows:
+                print("[ScaleBar] detected {}/{} images, um/px mean={:.6f} std={:.6f}".format(
+                    len(scale_rows), len(image_rows),
+                    summary["scale_bar"]["mean_um_per_pixel"], summary["scale_bar"]["std_um_per_pixel"]))
         self._save_metrics(summary, image_rows, object_rows, detection_rows, class_rows, partial_label_rows)
         self._save_confusion_matrix()
         if self.args.visualize:
@@ -550,6 +577,8 @@ def build_parser():
     parser.add_argument("--resume", type=str, default=None, help="checkpoint path")
     parser.add_argument("--save-dir", type=str, default="outputs/eval", help="directory for metrics and figures")
     parser.add_argument("--um-per-pixel", type=float, default=None, help="pixel size used for um and um2 quantification")
+    parser.add_argument("--auto-scale-bar", action="store_true", default=False, help="auto-detect scale bar from image and compute um/pixel")
+    parser.add_argument("--scale-bar-um", type=float, default=1.0, help="physical length the scale bar represents in um (default 1.0)")
     parser.add_argument("--postprocess-mito", action="store_true", default=False, help="apply instance unification + texture classifier post-processing to mito task predictions")
     parser.add_argument("--postprocess-classifier", type=str, default=DEFAULT_CLASSIFIER_PATH, help="path to trained texture classifier pkl for mito post-processing")
     parser.add_argument("--partial-label-eval", action="store_true", default=False, help="evaluate only predicted components that overlap same-class GT")
