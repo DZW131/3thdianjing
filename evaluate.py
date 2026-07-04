@@ -12,6 +12,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from PIL import Image
 from tqdm import tqdm
 
 from dataloaders import make_data_loader
@@ -19,6 +20,8 @@ from modeling.deeplab import DeepLab
 from utils.checkpoint import load_checkpoint
 from utils.jijie import apply_json_config_overrides, finalize_jijie_args, summarize_jijie_run
 from utils.jijie.inference import predict_logits
+from utils.jijie.partial_label_metrics import aggregate_gt_overlap_rows, compute_gt_overlap_rows
+from utils.jijie.postprocess import postprocess_mito_mask, DEFAULT_CLASSIFIER_PATH
 from utils.jijie.quantify import quantify_task_prediction
 from utils.jijie.visualization import (
     blend_mask,
@@ -85,6 +88,44 @@ def aggregate_numeric_rows(rows):
     return summary
 
 
+def aggregate_class_rows(rows):
+    grouped = {}
+    for row in rows:
+        key = (row.get("source"), row.get("class_id"), row.get("class_name"))
+        grouped.setdefault(key, []).append(row)
+
+    summary_rows = []
+    for (source, class_id, class_name), group_rows in sorted(grouped.items(), key=lambda item: (str(item[0][0]), int(item[0][1]))):
+        summary = {
+            "source": source,
+            "class_id": class_id,
+            "class_name": class_name,
+            "sample_count": len(group_rows),
+        }
+        keys = sorted(set().union(*(row.keys() for row in group_rows)))
+        for key in keys:
+            values = [
+                row[key]
+                for row in group_rows
+                if isinstance(row.get(key), (int, float)) and not isinstance(row.get(key), bool)
+            ]
+            if not values:
+                continue
+            summary[key + "_mean"] = float(np.mean(values))
+            if key in {"component_count", "area_px_sum", "area_um2_sum"}:
+                summary[key + "_sum"] = float(np.sum(values))
+        summary_rows.append(summary)
+    return summary_rows
+
+
+def parse_int_list(value):
+    if value is None or value == "":
+        return None
+    if isinstance(value, (list, tuple)):
+        return [int(item) for item in value]
+    return [int(item.strip()) for item in str(value).split(",") if item.strip()]
+
+
 class SegmentationEvaluator(object):
     def __init__(self, args):
         self.args = args
@@ -120,6 +161,33 @@ class SegmentationEvaluator(object):
             self.model = self.model.cuda()
         self.model.eval()
         self.evaluator = Evaluator(self.nclass)
+        if self.args.partial_label_class_ids is None:
+            fallback_class_ids = self.args.quantify_class_ids or self.args.metric_target_class_ids
+            if fallback_class_ids:
+                self.args.partial_label_class_ids = [int(class_id) for class_id in fallback_class_ids]
+            else:
+                self.args.partial_label_class_ids = list(range(1, self.nclass))
+
+    def _load_gray_image(self, sample, batch_index):
+        image_path = sample.get("image_path", None)
+        if image_path is None:
+            return None
+        if isinstance(image_path, (list, tuple)):
+            path = image_path[batch_index]
+        else:
+            path = image_path
+        if not os.path.isfile(path):
+            return None
+        img = Image.open(path).convert("L")
+        original_size = sample.get("original_size", None)
+        if original_size is not None:
+            if isinstance(original_size, (list, tuple)):
+                os_h, os_w = original_size[batch_index] if isinstance(original_size[0], (list, tuple)) else original_size
+            else:
+                os_h, os_w = original_size
+            if img.size != (os_w, os_h):
+                img = img.resize((os_w, os_h), Image.BILINEAR)
+        return np.asarray(img)
 
     def run(self):
         self.evaluator.reset()
@@ -127,6 +195,9 @@ class SegmentationEvaluator(object):
         image_rows = []
         object_rows = []
         detection_rows = []
+        class_rows = []
+        partial_label_rows = []
+        postprocess_stats = []
 
         tbar = tqdm(self.loader, desc="Evaluating", disable=not (self.args.show_progress))
         with torch.no_grad():
@@ -149,23 +220,58 @@ class SegmentationEvaluator(object):
 
                 pred_np = pred.cpu().numpy()
                 target_np = target.cpu().numpy()
+
+                if self.args.postprocess_mito and getattr(self.args, "task_name", None) == "mito":
+                    batch_size = pred_np.shape[0]
+                    for batch_index in range(batch_size):
+                        gray_image = self._load_gray_image(sample, batch_index)
+                        if gray_image is None:
+                            continue
+                        post_pred, post_stats = postprocess_mito_mask(
+                            pred_np[batch_index].astype(np.int32),
+                            gray_image=gray_image,
+                            classifier_path=self.args.postprocess_classifier,
+                            use_gray_tiebreak=True,
+                            use_texture_refine=bool(self.args.postprocess_classifier),
+                        )
+                        pred_np[batch_index] = post_pred
+                        postprocess_stats.append(post_stats)
+
                 self.evaluator.add_batch(target_np, pred_np)
+
+                if self.args.partial_label_eval:
+                    batch_size = pred_np.shape[0]
+                    for batch_index in range(batch_size):
+                        sample_id = sample.get("sample_id", ["sample"])[batch_index]
+                        partial_label_rows.extend(
+                            compute_gt_overlap_rows(
+                                gt_mask=target_np[batch_index].astype(np.int32),
+                                pred_mask=pred_np[batch_index].astype(np.int32),
+                                class_ids=self.args.partial_label_class_ids,
+                                class_names=self.class_names,
+                                sample_id=sample_id,
+                                min_overlap_pixels=self.args.partial_label_overlap_min_pixels,
+                            )
+                        )
 
                 if self.args.quantify_class_ids:
                     batch_size = pred_np.shape[0]
                     for batch_index in range(batch_size):
                         sample_id = sample.get("sample_id", ["sample"])[batch_index]
-                        image_summary, sample_object_rows, sample_detection_rows = quantify_task_prediction(
+                        image_summary, sample_object_rows, sample_detection_rows, sample_class_rows = quantify_task_prediction(
                             task_name=getattr(self.args, "task_name", "jijie"),
                             gt_mask=target_np[batch_index].astype(np.int32),
                             pred_mask=pred_np[batch_index].astype(np.int32),
                             class_names=self.class_names,
                             quantify_class_ids=self.args.quantify_class_ids,
                             sample_id=sample_id,
+                            um_per_pixel=self.args.um_per_pixel,
+                            return_class_rows=True,
                         )
                         image_rows.append(image_summary)
                         object_rows.extend(sample_object_rows)
                         detection_rows.extend(sample_detection_rows)
+                        class_rows.extend(sample_class_rows)
 
                 if self.args.visualize and len(vis_samples) < self.args.num_vis_samples:
                     cpu_images = image.detach().cpu()
@@ -183,14 +289,25 @@ class SegmentationEvaluator(object):
                             }
                         )
 
-        summary = self._build_summary(image_rows, detection_rows)
-        self._save_metrics(summary, image_rows, object_rows, detection_rows)
+        summary = self._build_summary(image_rows, detection_rows, partial_label_rows)
+        if postprocess_stats:
+            unified_total = sum(s.get("unified_count", 0) for s in postprocess_stats)
+            refined_total = sum(s.get("refined_count", 0) for s in postprocess_stats)
+            summary["postprocess"] = {
+                "enabled": True,
+                "images_processed": len(postprocess_stats),
+                "instances_unified": int(unified_total),
+                "instances_refined": int(refined_total),
+            }
+            print("[Postprocess] unified {} instances, refined {} instances across {} images".format(
+                unified_total, refined_total, len(postprocess_stats)))
+        self._save_metrics(summary, image_rows, object_rows, detection_rows, class_rows, partial_label_rows)
         self._save_confusion_matrix()
         if self.args.visualize:
             self._save_visualizations(vis_samples)
         return summary
 
-    def _build_summary(self, image_rows, detection_rows):
+    def _build_summary(self, image_rows, detection_rows, partial_label_rows):
         confusion = self.evaluator.confusion_matrix
         acc = self.evaluator.Pixel_Accuracy()
         acc_class = self.evaluator.Pixel_Accuracy_Class()
@@ -219,6 +336,15 @@ class SegmentationEvaluator(object):
 
         image_metric_summary = aggregate_numeric_rows(image_rows)
         detection_metric_summary = aggregate_numeric_rows(detection_rows)
+        partial_label_per_class_rows = []
+        partial_label_overlap_summary = {}
+        if self.args.partial_label_eval:
+            partial_label_per_class_rows, partial_label_overlap_summary = aggregate_gt_overlap_rows(
+                partial_label_rows,
+                class_ids=self.args.partial_label_class_ids,
+                class_names=self.class_names,
+                metric_target_class_ids=self.args.metric_target_class_ids,
+            )
 
         summary = {
             "dataset": self.args.dataset,
@@ -237,10 +363,12 @@ class SegmentationEvaluator(object):
             "per_class_metrics": per_class_rows,
             "image_metric_summary": image_metric_summary,
             "detection_metric_summary": detection_metric_summary,
+            "partial_label_overlap_summary": partial_label_overlap_summary,
+            "partial_label_overlap_per_class_metrics": partial_label_per_class_rows,
         }
         return summary
 
-    def _save_metrics(self, summary, image_rows, object_rows, detection_rows):
+    def _save_metrics(self, summary, image_rows, object_rows, detection_rows, class_rows, partial_label_rows):
         write_json(os.path.join(self.args.save_dir, "metrics_summary.json"), summary)
         write_csv(
             os.path.join(self.args.save_dir, "per_class_metrics.csv"),
@@ -268,6 +396,28 @@ class SegmentationEvaluator(object):
         if detection_rows:
             fieldnames = sorted({key for row in detection_rows for key in row.keys()})
             write_csv(os.path.join(self.args.save_dir, "detection_metrics.csv"), detection_rows, fieldnames)
+        if class_rows:
+            fieldnames = sorted({key for row in class_rows for key in row.keys()})
+            write_csv(os.path.join(self.args.save_dir, "class_task_metrics.csv"), class_rows, fieldnames)
+            class_summary_rows = aggregate_class_rows(class_rows)
+            summary_fieldnames = sorted({key for row in class_summary_rows for key in row.keys()})
+            write_csv(os.path.join(self.args.save_dir, "class_metric_summary.csv"), class_summary_rows, summary_fieldnames)
+        if summary.get("partial_label_overlap_per_class_metrics"):
+            fieldnames = sorted(
+                {key for row in summary["partial_label_overlap_per_class_metrics"] for key in row.keys()}
+            )
+            write_csv(
+                os.path.join(self.args.save_dir, "partial_label_overlap_per_class_metrics.csv"),
+                summary["partial_label_overlap_per_class_metrics"],
+                fieldnames,
+            )
+        if partial_label_rows:
+            fieldnames = sorted({key for row in partial_label_rows for key in row.keys()})
+            write_csv(
+                os.path.join(self.args.save_dir, "partial_label_overlap_sample_class_metrics.csv"),
+                partial_label_rows,
+                fieldnames,
+            )
 
     def _save_confusion_matrix(self):
         confusion = self.evaluator.confusion_matrix.astype(np.float64)
@@ -399,6 +549,12 @@ def build_parser():
     parser.add_argument("--gpu-ids", type=str, default="0", help="comma-separated GPU ids")
     parser.add_argument("--resume", type=str, default=None, help="checkpoint path")
     parser.add_argument("--save-dir", type=str, default="outputs/eval", help="directory for metrics and figures")
+    parser.add_argument("--um-per-pixel", type=float, default=None, help="pixel size used for um and um2 quantification")
+    parser.add_argument("--postprocess-mito", action="store_true", default=False, help="apply instance unification + texture classifier post-processing to mito task predictions")
+    parser.add_argument("--postprocess-classifier", type=str, default=DEFAULT_CLASSIFIER_PATH, help="path to trained texture classifier pkl for mito post-processing")
+    parser.add_argument("--partial-label-eval", action="store_true", default=False, help="evaluate only predicted components that overlap same-class GT")
+    parser.add_argument("--partial-label-classes", type=str, default=None, help="comma-separated remapped class ids for partial-label evaluation; defaults to quantify classes")
+    parser.add_argument("--partial-label-overlap-min-pixels", type=int, default=1, help="minimum same-class GT overlap pixels required to evaluate a predicted component")
     parser.add_argument("--visualize", action="store_true", default=False, help="save sample prediction figures")
     parser.add_argument("--num-vis-samples", type=int, default=10, help="number of samples to visualize")
     parser.add_argument("--no-progress", action="store_true", default=False, help="disable tqdm progress bars")
@@ -419,6 +575,7 @@ def configure_args(args):
         args.resume = auto_resume_path(args.dataset)
     if args.resume is None:
         raise RuntimeError("No checkpoint was provided and no model_best.pth.tar was found under run/{}.".format(args.dataset))
+    args.partial_label_class_ids = parse_int_list(args.partial_label_classes)
 
 
 def main():
@@ -441,6 +598,10 @@ def main():
     print("mIoU: {:.4f}".format(summary["mean_iou"]))
     print("Positive-class IoU: {:.4f}".format(summary["mean_positive_iou"]))
     print("Positive-class Dice: {:.4f}".format(summary["mean_positive_dice"]))
+    partial_summary = summary.get("partial_label_overlap_summary") or {}
+    if partial_summary:
+        print("Partial-label overlap IoU: {:.4f}".format(partial_summary.get("mean_iou", 0.0)))
+        print("Partial-label overlap Dice: {:.4f}".format(partial_summary.get("mean_dice", 0.0)))
     print("Artifacts saved to: {}".format(args.save_dir))
 
 

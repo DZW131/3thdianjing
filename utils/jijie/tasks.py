@@ -69,7 +69,7 @@ TASK_PRESETS = {
         "task_display_name": "肌节几何结构",
         "selected_classes": [10, 11, 12, 13],
         "metric_target_original_classes": [10, 12],
-        "quantify_original_classes": [10, 12],
+        "quantify_original_classes": [10, 11, 12, 13],
         "manifest_dir": "data/jijie/ImageSets/Segmentation/tasks/sarcomere/default",
         "train_resize_mode": "random_crop",
         "eval_resize_mode": "none",
