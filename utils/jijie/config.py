@@ -253,4 +253,17 @@ def summarize_jijie_run(args):
                 getattr(args, "side_tubule_prior_warmup_epochs", 0),
             )
         )
+    if getattr(args, "enable_metassl_labeled", False):
+        lines.append(
+            "[Task] metassl_labeled=on weight={} warmup={} beta={} delta_l={} ema_alpha={} min_region_weight={} protect_positive={} positive_min={}".format(
+                getattr(args, "metassl_labeled_weight", 1.0),
+                getattr(args, "metassl_labeled_warmup_epochs", 0),
+                getattr(args, "metassl_beta", 3.0),
+                getattr(args, "metassl_delta_l", 0.6),
+                getattr(args, "metassl_ema_alpha", 0.99),
+                getattr(args, "metassl_min_region_weight", 0.05),
+                getattr(args, "metassl_protect_positive_labels", False),
+                getattr(args, "metassl_positive_label_min_weight", 0.8),
+            )
+        )
     return lines

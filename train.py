@@ -3,6 +3,7 @@ import os
 import random
 import sys
 import time
+from contextlib import contextmanager
 
 import numpy as np
 import torch
@@ -18,7 +19,7 @@ from utils.calculate_weights import calculate_weigths_labels
 from utils.checkpoint import load_checkpoint, state_dict_from_model
 from utils.jijie import apply_json_config_overrides, finalize_jijie_args, summarize_jijie_run
 from utils.jijie.quantify import quantify_task_prediction
-from utils.loss import SegmentationLosses
+from utils.loss import MetaSSLLabeledLoss, SegmentationLosses
 from utils.lr_scheduler import LR_Scheduler
 from utils.metrics import Evaluator
 from utils.saver import Saver
@@ -58,6 +59,21 @@ def aggregate_numeric_dicts(rows):
         if values:
             summary[key] = float(np.mean(values))
     return summary
+
+
+@contextmanager
+def batchnorm_eval_only(model):
+    """Temporarily freeze BatchNorm statistics while leaving other modules unchanged."""
+    bn_modules = []
+    for module in model.modules():
+        if isinstance(module, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d, torch.nn.BatchNorm3d, SynchronizedBatchNorm2d)):
+            bn_modules.append((module, module.training))
+            module.eval()
+    try:
+        yield
+    finally:
+        for module, was_training in bn_modules:
+            module.train(was_training)
 
 
 class Trainer(object):
@@ -107,6 +123,23 @@ class Trainer(object):
             weight = None
 
         self.criterion = SegmentationLosses(weight=weight, cuda=args.cuda).build_loss(mode=args.loss_type)
+        self.metassl_labeled_criterion = None
+        if getattr(args, "enable_metassl_labeled", False):
+            if args.loss_type != "ce_dice":
+                print("[MetaSSL] labeled heterogeneous loss is implemented as CE+Dice; base loss is {}.".format(args.loss_type))
+            self.metassl_labeled_criterion = MetaSSLLabeledLoss(
+                num_classes=model.nclass if hasattr(model, "nclass") else self.nclass,
+                class_weight=weight.cuda() if (weight is not None and args.cuda) else weight,
+                beta=args.metassl_beta,
+                delta_l=args.metassl_delta_l,
+                ema_alpha=args.metassl_ema_alpha,
+                initial_threshold=args.metassl_initial_threshold,
+                min_threshold=args.metassl_min_threshold,
+                max_threshold=args.metassl_max_threshold,
+                min_region_weight=args.metassl_min_region_weight,
+                protect_positive_labels=args.metassl_protect_positive_labels,
+                positive_label_min_weight=args.metassl_positive_label_min_weight,
+            )
         self.model = model
         self.optimizer = optimizer
         self.evaluator = Evaluator(self.nclass)
@@ -171,6 +204,19 @@ class Trainer(object):
             print(line)
         if self.args.batch_size == 1:
             print("[Run] batch_size=1 detected; BatchNorm layers will be kept in eval mode during training.")
+        if getattr(self.args, "enable_metassl_labeled", False):
+            print(
+                "[MetaSSL] labeled=on weight={} warmup={} beta={} delta_l={} ema_alpha={} min_region_weight={} protect_positive={} positive_min={}".format(
+                    self.args.metassl_labeled_weight,
+                    self.args.metassl_labeled_warmup_epochs,
+                    self.args.metassl_beta,
+                    self.args.metassl_delta_l,
+                    self.args.metassl_ema_alpha,
+                    self.args.metassl_min_region_weight,
+                    self.args.metassl_protect_positive_labels,
+                    self.args.metassl_positive_label_min_weight,
+                )
+            )
 
     def _set_batchnorm_eval(self):
         target_model = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
@@ -186,6 +232,17 @@ class Trainer(object):
         if warmup_epochs <= 0:
             return base_weight
         return base_weight * min(1.0, float(epoch + 1) / float(warmup_epochs))
+
+    def _metassl_labeled_blend(self, epoch):
+        if not getattr(self.args, "enable_metassl_labeled", False):
+            return 0.0
+        max_weight = float(getattr(self.args, "metassl_labeled_weight", 1.0) or 0.0)
+        if max_weight <= 0:
+            return 0.0
+        warmup_epochs = int(getattr(self.args, "metassl_labeled_warmup_epochs", 0) or 0)
+        if warmup_epochs <= 0:
+            return min(1.0, max_weight)
+        return min(1.0, max_weight * min(1.0, float(epoch + 1) / float(warmup_epochs)))
 
     def _auxiliary_prior_loss(
         self,
@@ -274,7 +331,15 @@ class Trainer(object):
             self.scheduler(self.optimizer, i, epoch, max(0.0, self.best_pred))
             self.optimizer.zero_grad()
             output = self.model(image)
-            seg_loss = self.criterion(output, target)
+            base_seg_loss = self.criterion(output, target)
+            seg_loss = base_seg_loss
+            metassl_stats = None
+            metassl_blend = self._metassl_labeled_blend(epoch)
+            if self.metassl_labeled_criterion is not None and metassl_blend > 0:
+                with torch.no_grad(), batchnorm_eval_only(self.model):
+                    ref_output = self.model(image)
+                metassl_loss, metassl_stats = self.metassl_labeled_criterion(output, ref_output, target)
+                seg_loss = (1.0 - metassl_blend) * base_seg_loss + metassl_blend * metassl_loss
             t_tubule_prior_loss = self._t_tubule_prior_loss(output, sample, epoch)
             side_tubule_prior_loss = self._side_tubule_prior_loss(output, sample, epoch)
             prior_loss = t_tubule_prior_loss + side_tubule_prior_loss
@@ -290,6 +355,17 @@ class Trainer(object):
 
             global_step = i + num_batches * epoch
             self.writer.add_scalar("train/total_loss_iter", loss.item(), global_step)
+            if metassl_stats is not None:
+                self.writer.add_scalar("train/base_seg_loss_iter", base_seg_loss.item(), global_step)
+                self.writer.add_scalar("train/metassl_blend_iter", metassl_blend, global_step)
+                self.writer.add_scalar("train/metassl_threshold_mean_iter", metassl_stats["metassl_threshold_mean"], global_step)
+                self.writer.add_scalar("train/metassl_uc_fraction_iter", metassl_stats["metassl_uc_fraction"], global_step)
+                self.writer.add_scalar("train/metassl_dc_fraction_iter", metassl_stats["metassl_dc_fraction"], global_step)
+                self.writer.add_scalar(
+                    "train/metassl_positive_disagreement_fraction_iter",
+                    metassl_stats["metassl_positive_disagreement_fraction"],
+                    global_step,
+                )
             if t_tubule_prior_loss.item() > 0:
                 self.writer.add_scalar("train/t_tubule_prior_loss_iter", t_tubule_prior_loss.item(), global_step)
             if side_tubule_prior_loss.item() > 0:
@@ -549,6 +625,18 @@ def build_parser():
     parser.add_argument("--eval-interval", type=int, default=1, help="validation interval")
     parser.add_argument("--no-val", action="store_true", default=False, help="skip validation")
     parser.add_argument("--no-progress", action="store_true", default=False, help="disable tqdm progress bars")
+    parser.add_argument("--enable-metassl-labeled", action="store_true", default=False, help="enable labeled-image MetaSSL heterogeneous CE+Dice loss")
+    parser.add_argument("--metassl-labeled-weight", type=float, default=1.0, help="maximum blend ratio for MetaSSL labeled loss")
+    parser.add_argument("--metassl-labeled-warmup-epochs", type=int, default=20, help="epochs used to ramp MetaSSL labeled loss")
+    parser.add_argument("--metassl-beta", type=float, default=3.0, help="generalized Gaussian beta for MetaSSL region weights")
+    parser.add_argument("--metassl-delta-l", type=float, default=0.6, help="labeled-image interval delta_l for MetaSSL region weights")
+    parser.add_argument("--metassl-ema-alpha", type=float, default=0.99, help="EMA alpha for adaptive MetaSSL confidence threshold")
+    parser.add_argument("--metassl-initial-threshold", type=float, default=0.5, help="initial class-wise confidence threshold")
+    parser.add_argument("--metassl-min-threshold", type=float, default=0.5, help="minimum adaptive confidence threshold")
+    parser.add_argument("--metassl-max-threshold", type=float, default=0.99, help="maximum adaptive confidence threshold")
+    parser.add_argument("--metassl-min-region-weight", type=float, default=0.05, help="minimum spatial weight assigned by MetaSSL")
+    parser.add_argument("--metassl-protect-positive-labels", action="store_true", default=False, help="avoid heavily down-weighting manually labeled positive pixels")
+    parser.add_argument("--metassl-positive-label-min-weight", type=float, default=0.8, help="minimum weight for positive-label pixels when predictions disagree")
     return parser
 
 
