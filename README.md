@@ -1,425 +1,156 @@
-# JIJIE v0.5 任务化分割与量化工程
+# 心肌病超微结构电镜分割与量化
 
-## 项目定位
+研究代码交接版，DeepLabV3+（默认ResNet101、output stride 16），三个任务：线粒体损伤分类分割、线粒体-肌浆网关系、肌节结构分割。包含整图滑窗预测、量化、医生复核轮廓导出及修订数据微调。**不是临床诊断软件，结果需人工复核。**
 
-这个版本把心肌超微结构项目按最终量化目标拆成三条任务线来做，而不是继续用单一的 14 类统一分割：
+交接分支：`codex/reproducible-handoff-20261020`。未替换主模型。原始数据、患者标识、数据库、样本划分需由项目负责人授权提供，不随公开代码发布。
 
-- `mito`：线粒体状态分割
-- `mito_sr`：线粒体-肌浆网关系
-- `sarcomere`：肌节几何结构
+## 安装与快速检查
 
-v0.5 的重点不是再重做 prepared dataset，而是在现有 [data/jijie](data/jijie) 基线之上，把训练组织、最终 split、推理导出和可视化链路做得更适合服务器直接复现。
+以下在仓库根目录Linux Bash运行。已工作的服务器环境为Python3.10、RTX5090、torch2.11.0+cu128、torchvision0.26.0+cu128，不是旧4090的cu121环境。
 
-## v0.5 核心变化
-
-- 新增 `final_200` group-wise manifest：
-  - 每个任务都按 `group_id` 精确选出 `200` 张训练图
-  - 剩余可安全评估的样本进入 `test`
-  - `val.txt` 保留为空文件，用于无验证集最终训练
-- 保留原有两套 split：
-  - `default`：开发基线
-  - `folds`：group-wise 5-fold 调参
-- 新增 v0.5 配置文件：
-  - `configs/mito/mito_v0_5_final200.json`
-  - `configs/mito_sr/mito_sr_v0_5_final200.json`
-  - `configs/sarcomere/sarcomere_v0_5_final200.json`
-- 无验证集训练闭环补齐：
-  - 训练结束时自动把最终 checkpoint 提升为 `model_best.pth.tar`
-  - 后续评估命令可直接复用现有入口
-- 推理可视化增强：
-  - 不同类别使用固定颜色
-  - 自动输出 `class_palette.csv`
-  - 自动输出 `class_legend.png`
-  - 每个样本单独保存彩色 mask 和 overlay 图
-- 滑窗推理支持 `batch_size > 1`，评估脚本更稳健
-
-## 仓库结构
-
-```text
-.
-├── train.py
-├── evaluate.py
-├── JIJIE_IMPLEMENTATION_PLAN.md
-├── train_jijie.txt
-├── configs/
-│   ├── mito/
-│   │   ├── mito_v0_2.json
-│   │   └── mito_v0_5_final200.json
-│   ├── mito_sr/
-│   │   ├── mito_sr_v0_2.json
-│   │   └── mito_sr_v0_5_final200.json
-│   └── sarcomere/
-│       ├── sarcomere_v0_2.json
-│       └── sarcomere_v0_5_final200.json
-├── dataloaders/
-│   ├── __init__.py
-│   ├── custom_transforms.py
-│   └── datasets/jijie.py
-├── tools/
-│   ├── build_jijie_task_manifests.py
-│   ├── audit_raw_jijie_dataset.py
-│   └── prepare_jijie_dataset.py
-├── utils/
-│   ├── loss.py
-│   ├── metrics.py
-│   ├── saver.py
-│   ├── summaries.py
-│   └── jijie/
-│       ├── config.py
-│       ├── inference.py
-│       ├── quantify.py
-│       ├── tasks.py
-│       └── visualization.py
-└── data/
-    └── jijie/
-        ├── JPEGImages/
-        ├── SegmentationClass/
-        ├── ImageSets/Segmentation/
-        └── metadata/
+```bash
+git clone --depth 1 --branch codex/reproducible-handoff-20261020 https://github.com/DZW131/3thdianjing.git
+cd 3thdianjing
+python3.10 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
+python -m pip install -r requirements-5090.txt
+python -m unittest discover -s tests -v
+python train.py --help
+python evaluate.py --help
 ```
 
-## 数据组织
+版本来自服务器实际环境，未在空白机器全量重装；[验证记录](docs/HANDOFF.md)。`requirements.txt`为较宽范围，`requirements-5090.txt`为相关包的精确版本。GPU驱动必须支持所选wheel。标尺OCR还需系统Tesseract及英文语言包，如Ubuntu安装`tesseract-ocr tesseract-ocr-eng`。
 
-训练仍然直接使用 [data/jijie](data/jijie)：
+## 目录结构
+
+| 路径 | 用途 |
+|---|---|
+| train.py / evaluate.py | 训练、评估、量化、可视化 |
+| configs/{mito,mito_sr,sarcomere} | 三任务与实验配置 |
+| modeling / dataloaders | 网络、标签映射、裁剪增强 |
+| utils/jijie | 滑窗、量化、后处理、标尺、部分标注指标 |
+| tools | 数据准备、批量导出、DB转换、CV及汇总 |
+| tests / docs | 无患者数据测试、交接与权重清单 |
+| data / run / outputs | 私有数据、权重、结果，Git忽略 |
+
+## 数据组织及标签
+
+医生原始导出为病例/时间目录中的TIF与对应`slice.db`。不要把同名DB扁平化复制。处理后的单通道PNG存原始类别ID，与图像尺寸一致：
 
 ```text
 data/jijie/
-├── JPEGImages/
-├── SegmentationClass/
-├── ImageSets/Segmentation/
-└── metadata/
+  JPEGImages/<sample_id>.jpg
+  SegmentationClass/<sample_id>.png
+  ImageSets/Segmentation/tasks/<task>/final_200/{train,val,test}.txt
+  metadata/...
 ```
 
-原始导出库 `fenge_datasets/` 的角色没有变，仍然只用于：
+清单每行一个不带扩展名的ID。`--data-root`与`--manifest-dir`独立设置，外部数据应同时指定。
 
-- 数据审计
-- 医生补标
-- 后续增强版 manifest 重建
+| 原始ID | 定义 |
+|---|---|
+| 0 | 背景 |
+| 1/2/3/4 | 严重损伤/中度损伤/健康/自噬线粒体 |
+| 5 | 肌浆网 |
+| 6/7/8/9 | 闰盘/Z线样物质堆积/脂滴/糖原颗粒 |
+| 10/11/12/13 | Z线/T管/M线/心肌侧管 |
+| 255 | 部分标注实验中的忽略区域 |
 
-## 任务 manifest
-
-当前任务 manifest 目录：
-
-```text
-data/jijie/ImageSets/Segmentation/tasks/
-├── mito/
-│   ├── default/
-│   ├── final_200/
-│   └── folds/
-├── mito_sr/
-│   ├── default/
-│   ├── final_200/
-│   └── folds/
-└── sarcomere/
-    ├── default/
-    ├── final_200/
-    └── folds/
-```
-
-其中：
-
-- `default`：沿用旧版 train/val/test，用于开发基线
-- `folds`：group-wise 5-fold，用于调参和稳定性检查
-- `final_200`：v0.5 最终训练方案，`200 train / rest test / no val`
-
-`final_200` 是按 `group_id` 选出来的，不会乱切同一病例组。
-
-### 当前 v0.5 final_200 规模
-
-| Task | Train | Test | Test Groups | Holdout 但不纳入 test |
-| --- | ---: | ---: | ---: | ---: |
-| `mito` | 200 | 36 | 5 | 33 |
-| `mito_sr` | 200 | 36 | 5 | 33 |
-| `sarcomere` | 200 | 32 | 5 | 49 |
-
-“Holdout 但不纳入 test” 指的是剩余样本里不满足安全评估条件的部分，比如仅部分标注或仅模板样本，它们不会被误当成正式测试集。
-
-### 重新生成 manifest
+mito选择1–4，mito_sr选择1–5，sarcomere选择10–13。内部按顺序重映射为1起始连续ID，肌节的1/2/3/4对应原10/11/12/13。**T管不等于侧管**；历史`t_prior`配置不是推荐方案。
 
 ```bash
-python tools/build_jijie_task_manifests.py \
-  --prepared-root ./data/jijie \
-  --task-registry ./data/jijie_audit/task_registry.csv \
-  --output-root ./data/jijie/ImageSets/Segmentation/tasks \
-  --num-folds 5 \
-  --final-train-count 200 \
-  --final-manifest-name final_200
+python tools/prepare_jijie_dataset.py --input-root /path/to/raw_export --output-root data/jijie
+python tools/build_jijie_task_manifests.py --help
 ```
 
-## 三条任务线
+原始准备器的分组划分目标为70%/15%/15%，不等于每次历史实验实际比例。任务清单构建依赖审核过的task registry；复现实验请向负责人获取原始清单。52张修订图按6病例分五折，留出17/10/10/9/6张。不要随机切patch替代病例分组。`--force`可能删除输出目录，默认不用。
 
-### 1. mito
+## 权重
 
-- 标签：`1,2,3,4`
-- 目标：四类线粒体分割与对象级统计
-- 输入策略：高分辨率随机 patch
-- 量化：计数、面积、周长、圆度、Feret、长宽比、form factor
-
-### 2. mito_sr
-
-- 标签：`1,2,3,4,5`
-- 目标：线粒体和肌浆网联合分割
-- 输入策略：更大的随机 patch
-- 量化：肌浆网面积、最近线粒体边界距离
-
-### 3. sarcomere
-
-- 标签：训练用 `10,11,12,13`
-- 主要量化目标：`10,12`
-- 输入策略：大 patch / 整图滑窗
-- 量化：基础组件级统计，后续再向高级几何参数扩展
-
-## 训练命令
-
-### v0.5 最终训练
-
-线粒体状态分割：
+[权重清单](docs/weights_inventory.json)包含40个文件的相对路径、大小、SHA-256及URL。URL为空表示未发布。下载工具校验大小及哈希，不覆盖不一致文件。
 
 ```bash
-python train.py \
-  --config configs/mito/mito_v0_5_final200.json \
-  --gpu-ids 0 \
-  --workers 4
+python tools/fetch_weights.py --list
+python tools/fetch_weights.py --path run/jijie/jijie_mito_v0_5_final200_5090_retrain/model_best.pth.tar
+python tools/fetch_weights.py --path run/jijie/mito_texture_classifier.pkl
 ```
 
-线粒体-肌浆网关系：
+未公开权重须授权SCP获取（EXPERIMENT替换为清单中的名称）：
 
 ```bash
-python train.py \
-  --config configs/mito_sr/mito_sr_v0_5_final200.json \
-  --gpu-ids 0 \
-  --workers 4
+python tools/fetch_weights.py --path run/jijie/EXPERIMENT/model_best.pth.tar --ssh USER@HOST --remote-root /path/to/project
 ```
 
-肌节结构：
+仅加载可信checkpoint及joblib/pickle，哈希不是安全沙箱。ResNet默认下载ImageNet初始化；加载完整权重推理时`export EM_DISABLE_PRETRAINED=1`可避免该联网请求。这个变量仅对ResNet有效，不要用于需要ImageNet初始化的训练。
+
+## 训练
 
 ```bash
-python train.py \
-  --config configs/sarcomere/sarcomere_v0_5_final200.json \
-  --gpu-ids 0 \
-  --workers 2
+python train.py --config configs/mito/mito_v0_5_final200.json --data-root /path/to/prepared --manifest-dir /path/to/prepared/ImageSets/Segmentation/tasks/mito/final_200 --checkname mito_new_run
 ```
 
-### v0.2 开发基线
+其他任务改用`configs/mito_sr/mito_sr_v0_5_final200.json`或`configs/sarcomere/sarcomere_v0_5_final200.json`，同时替换manifest任务名。CE+Dice、SGD、poly调度；crop为640/768/1024，batch为4/2/1，epoch为150/160/180。基线保存的参数记录也使用这些轮数，**不能笼统称全部200轮**；要200轮显式加`--epochs 200`并作为新实验。
 
-如果你还想保留旧的 train/val/test 方案做对照，可以继续使用 v0.2 配置：
+肌节v0_5含Z/M标签膨胀radius=1，并非完全无标签处理；未启用T管/侧管先验。`no_val=true`时末轮被命名model_best，不代表验证最优。权重写入`run/jijie/<checkname>/`。历史JSON合并逻辑仅在CLI值不同于parser默认值时覆盖；要把某项改回默认（如膨胀设0），请复制修改JSON。
+
+修订52张五折微调，独立保存、不替换主模型：
 
 ```bash
-python train.py --config configs/mito/mito_v0_2.json --gpu-ids 0 --workers 4
-python train.py --config configs/mito_sr/mito_sr_v0_2.json --gpu-ids 0 --workers 4
-python train.py --config configs/sarcomere/sarcomere_v0_2.json --gpu-ids 0 --workers 2
+python tools/run_mito_doctor_revision_cv.py --config configs/mito/mito_v0_9_doctor_revision_cv5.json --baseline-checkpoint run/jijie/jijie_mito_v0_5_final200_5090_retrain/model_best.pth.tar --data-root /path/to/revised52 --folds-root /path/to/revised52/ImageSets/Segmentation/tasks/mito/folds --run-prefix revised52_new_cv
 ```
 
-## 评估命令
+原实验val与test相同且参与选模，不是独立测试。三来源融合、MetaSSL及结构先验保留为实验功能，未证明优于主方案；不能称为论文官方复现。
 
-### v0.5 最终评估
+## 评估与可视化
 
 ```bash
-python evaluate.py \
-  --config configs/mito/mito_v0_5_final200.json \
-  --split test \
-  --resume run/jijie/jijie_mito_v0_5_final200/model_best.pth.tar \
-  --save-dir outputs/eval/jijie_mito_v0_5_final200
+export EM_DISABLE_PRETRAINED=1
+python evaluate.py --config configs/mito/mito_v0_5_final200.json --data-root /path/to/prepared --manifest-dir /path/to/prepared/ImageSets/Segmentation/tasks/mito/final_200 --split test --resume run/jijie/jijie_mito_v0_5_final200_5090_retrain/model_best.pth.tar --save-dir outputs/eval/mito --visualize --num-vis-samples 5 --postprocess-mito --postprocess-classifier run/jijie/mito_texture_classifier.pkl
 ```
+
+输出包括metrics_summary.json、per_class_metrics.csv、混淆矩阵、量化表及可视化。`--partial-label-eval`另外计算只保留与同类GT重叠预测组件的指标，有选择偏倚，不能代替整图指标。255像素不计分；未标区域设0还是255会影响误检统计。
+
+量化包括组件数量、面积、周长、Feret、形态特征及肌浆网-线粒体距离；组件不必然等于真实独立细胞器。已知尺度用`--um-per-pixel 0.005`（示例，必须换真实值）；`--auto-scale-bar`启用自动识别，仍需人工检查。尺度失败不能把像素值称为微米。α角脚本仅为探索，结构归属问题未解决。
+
+## 整图推理与标注平台导出
+
+先用fetch_weights获取另外两个基线，然后：
 
 ```bash
-python evaluate.py \
-  --config configs/mito_sr/mito_sr_v0_5_final200.json \
-  --split test \
-  --resume run/jijie/jijie_mito_sr_v0_5_final200/model_best.pth.tar \
-  --save-dir outputs/eval/jijie_mito_sr_v0_5_final200
+export EM_DISABLE_PRETRAINED=1
+python tools/export_doctor_review_predictions.py --data-root /path/to/prepared --all-images --mito-resume run/jijie/jijie_mito_v0_5_final200_5090_retrain/model_best.pth.tar --mito-sr-resume run/jijie/jijie_mito_sr_v0_5_final200_5090_retrain/model_best.pth.tar --postprocess-mito --postprocess-classifier run/jijie/mito_texture_classifier.pkl --output-root outputs/review
+python tools/export_sarcomere_predictions.py --data-root /path/to/prepared --all-images --resume run/jijie/jijie_sarcomere_v0_5_final200_5090_retrain/model_best.pth.tar --output-root outputs/review_sarcomere
 ```
+
+首次加`--max-samples 1`。输出原图、原始类别mask、彩色mask、叠加图和manifest。原始TIF与可编辑DB配对：
 
 ```bash
-python evaluate.py \
-  --config configs/sarcomere/sarcomere_v0_5_final200.json \
-  --split test \
-  --resume run/jijie/jijie_sarcomere_v0_5_final200/model_best.pth.tar \
-  --save-dir outputs/eval/jijie_sarcomere_v0_5_final200
+python tools/export_platform_tif_ai_db.py --raw-slice-root /path/to/raw_slices --mito-mask-dir /path/to/mito_masks --sr-mask-dir /path/to/sr_masks --output-root outputs/platform
+python tools/validate_platform_db_export.py --help
 ```
 
-### 保存彩色可视化
+mask路径从导出manifest取得。DB结构需与平台兼容，先导入1张验证坐标和轮廓可编辑。默认仅导出AI对象，`--keep-doctor-marks`可保留源医生对象。不要覆盖源目录；`--overwrite`会替换输出。watershed分离粘连组件不是实例真值。SVS图像不能代替可编辑标注。
 
-```bash
-python evaluate.py \
-  --config configs/mito/mito_v0_5_final200.json \
-  --split test \
-  --resume run/jijie/jijie_mito_v0_5_final200/model_best.pth.tar \
-  --save-dir outputs/eval/jijie_mito_v0_5_final200_vis \
-  --visualize \
-  --num-vis-samples 20
-```
+## 当前结果
 
-## 可视化输出
+2026-10-14同一52张修订切片，五折平均Positive Dice/IoU：
 
-启用 `--visualize` 后，除了常规指标，还会输出：
+| 方案 | Dice | IoU |
+|---|---:|---:|
+| 原模型 | 58.71% | 47.60% |
+| 原模型＋后处理 | 75.70% | 67.00% |
+| 直接微调 | 61.06% | 49.60% |
+| 微调＋原后处理 | 46.00% | 38.52% |
 
-- `class_palette.csv`
-- `visualizations/class_legend.png`
-- `visualizations/*_composite.png`
-- `visualizations/*_gt_mask.png`
-- `visualizations/*_pred_mask.png`
-- `visualizations/*_overlay_gt.png`
-- `visualizations/*_overlay_pred.png`
+来源：[聚合结果](docs/results/four_way_overall.csv)、[分类别](docs/results/four_way_classes.csv)。仅发布聚合统计，私有原始日志由负责人保管，汇总脚本为`tools/report_mito_four_way.py`。五折均值与合并混淆矩阵宏平均不能混用。当前仍保留原模型＋后处理。
 
-这些图里不同类别会使用固定颜色，不同任务子集也会保持稳定映射。
+## 已知问题与交接边界
 
-## 评估输出
-
-每次评估目录下会保存：
-
-- `metrics_summary.json`
-- `per_class_metrics.csv`
-- `class_palette.csv`
-- `confusion_matrix.csv`
-- `confusion_matrix.png`
-- `image_task_metrics.csv`
-- `object_metrics.csv`
-- `detection_metrics.csv`
-
-## 服务器推荐工作流
-
-### 1. 拉取 v0.5 分支
-
-```bash
-cd /root
-git clone -b codex/jijie-v0.5 https://github.com/DZW131/3thdianjing.git 3thdianjing_v0.5
-```
-
-### 2. 复用旧环境
-
-```bash
-conda activate dianjing
-cd /root/3thdianjing_v0.5
-python -c "import torch, torchvision, numpy, PIL, matplotlib, scipy, tqdm; print('env ok')"
-```
-
-### 3. 复用旧数据
-
-推荐直接软链接旧目录里的数据：
-
-```bash
-cd /root/3thdianjing_v0.5/data
-rm -rf jijie
-ln -s /root/3thdianjing/data/jijie jijie
-```
-
-如果你已经保留了新版仓库自带的 `ImageSets/Segmentation/tasks`，则不要整目录覆盖，只需要保证：
-
-```text
-data/jijie/JPEGImages
-data/jijie/SegmentationClass
-data/jijie/ImageSets/Segmentation/tasks
-```
-
-同时存在。
-
-### 4. 直接启动 v0.5 训练
-
-```bash
-python train.py --config configs/mito/mito_v0_5_final200.json --gpu-ids 0 --workers 4
-```
-
-### 5. 训练结束后评估
-
-```bash
-python evaluate.py \
-  --config configs/mito/mito_v0_5_final200.json \
-  --split test \
-  --resume run/jijie/jijie_mito_v0_5_final200/model_best.pth.tar \
-  --save-dir outputs/eval/jijie_mito_v0_5_final200
-```
-
-## 已知限制
-
-- 本地工作区当前仍然缺少 `data/jijie/JPEGImages`，因此无法在本机完成完整训练 smoke test。
-- `sarcomere` 的高级几何参数仍需要后续规则校准，当前主打的是稳定的任务分割和基础组件统计。
-- `um_per_pixel` 还没有完整回写进 prepared dataset，因此当前导出的多数统计默认仍以像素单位为主。
-
-## 推荐实验记录表
-
-| Version | Task | Config | Train Split | Test Split | Output Dir | Notes |
-| --- | --- | --- | --- | --- | --- | --- |
-| v0.5 | mito | `configs/mito/mito_v0_5_final200.json` | `final_200/train.txt` | `final_200/test.txt` | `outputs/eval/jijie_mito_v0_5_final200` | no val |
-| v0.5 | mito_sr | `configs/mito_sr/mito_sr_v0_5_final200.json` | `final_200/train.txt` | `final_200/test.txt` | `outputs/eval/jijie_mito_sr_v0_5_final200` | no val |
-| v0.5 | sarcomere | `configs/sarcomere/sarcomere_v0_5_final200.json` | `final_200/train.txt` | `final_200/test.txt` | `outputs/eval/jijie_sarcomere_v0_5_final200` | no val |
-| v0.2 | mito | `configs/mito/mito_v0_2.json` | `default/train.txt` | `default/test.txt` | `outputs/eval/jijie_mito_v0_2` | baseline |
-
-## sarcomere v0.6 细长结构实验
-
-本分支新增了 3 个只针对 `sarcomere` 任务的实验配置，用来验证 Z 线、M 线和心肌侧管这类细长、断续、边界模糊结构的训练增强方案。旧的 v0.5 配置默认不启用这些逻辑，因此原始训练和推理流程不会被污染。
-
-### 结构约定
-
-- Z 线和 M 线是肌节几何测量的主要锚点，后续肌节长度、形状和排列指标主要依赖它们的端点与相邻关系。
-- T 管是单独类别，本轮实验先不对 T 管做膨胀，也不生成 T 管伪标签。
-- 心肌侧管是单独类别，Z/M 端点连接线只作为低权重的心肌侧管候选先验，不能监督到 T 管类别。
-
-### 新增方案
-
-| Experiment | Config | Purpose |
-| --- | --- | --- |
-| Z/M/side dilation only | `configs/sarcomere/sarcomere_v0_6_zm_side_dilate_only.json` | 训练阶段只对 Z 线、M 线、心肌侧管做 1 像素轻微膨胀，不处理 T 管 |
-| side prior only | `configs/sarcomere/sarcomere_v0_6_side_prior_only.json` | 根据 Z/M 线端点生成低权重心肌侧管候选线辅助监督 |
-| dilation + side prior | `configs/sarcomere/sarcomere_v0_6_zm_side_dilate_side_prior.json` | 同时启用 Z/M/侧管标签膨胀和心肌侧管结构先验 |
-
-心肌侧管结构先验只在训练阶段生效：代码会在训练 mask 中提取 Z 线、M 线连通域端点，生成候选连接线，并以 `side_tubule_prior_loss_weight` 控制辅助监督强度。默认采用 warm-up，前 20 个 epoch 从 0 逐步增加到最大权重 0.2。候选线默认只落在背景或已有心肌侧管区域，不覆盖 Z 线、M 线和 T 管标注；评估和测试仍然使用原始标注 mask。
-
-早期的 `sarcomere_v0_6_t_prior_only.json` 和 `sarcomere_v0_6_dilate_t_prior.json` 文件名保留为兼容入口，但内部已经改为心肌侧管先验，并关闭 T 管先验。新实验建议优先使用上表中的显式配置名。
-
-### 服务器启动方式
-
-建议在服务器单独 clone 本分支，避免覆盖旧的 baseline 目录：
-
-```bash
-git clone -b codex/sarcomere-structure-prior https://github.com/DZW131/3thdianjing.git 3thdianjing_sarcomere_prior
-cd 3thdianjing_sarcomere_prior
-conda activate dianjing
-```
-
-复用已有数据时，保证以下目录存在：
-
-```text
-data/jijie/JPEGImages
-data/jijie/SegmentationClass
-data/jijie/ImageSets/Segmentation/tasks
-```
-
-如需软链接旧数据：
-
-```bash
-rm -rf data/jijie
-ln -s /root/3thdianjing/data/jijie data/jijie
-```
-
-启动三组消融实验：
-
-```bash
-python train.py --config configs/sarcomere/sarcomere_v0_6_zm_side_dilate_only.json --gpu-ids 0 --workers 2
-python train.py --config configs/sarcomere/sarcomere_v0_6_side_prior_only.json --gpu-ids 0 --workers 2
-python train.py --config configs/sarcomere/sarcomere_v0_6_zm_side_dilate_side_prior.json --gpu-ids 0 --workers 2
-```
-
-训练完成后评估：
-
-```bash
-python evaluate.py \
-  --config configs/sarcomere/sarcomere_v0_6_zm_side_dilate_only.json \
-  --split test \
-  --resume run/jijie/jijie_sarcomere_v0_6_zm_side_dilate_only/model_best.pth.tar \
-  --save-dir outputs/eval/jijie_sarcomere_v0_6_zm_side_dilate_only
-
-python evaluate.py \
-  --config configs/sarcomere/sarcomere_v0_6_side_prior_only.json \
-  --split test \
-  --resume run/jijie/jijie_sarcomere_v0_6_side_prior_only/model_best.pth.tar \
-  --save-dir outputs/eval/jijie_sarcomere_v0_6_side_prior_only
-
-python evaluate.py \
-  --config configs/sarcomere/sarcomere_v0_6_zm_side_dilate_side_prior.json \
-  --split test \
-  --resume run/jijie/jijie_sarcomere_v0_6_zm_side_dilate_side_prior/model_best.pth.tar \
-  --save-dir outputs/eval/jijie_sarcomere_v0_6_zm_side_dilate_side_prior
-```
-
-建议优先比较 `per_class_metrics.csv` 中 Z 线、M 线、心肌侧管的 IoU/Dice/Recall，并额外观察 T 管的假阳性是否下降；可视化重点看 `visualizations/*_composite.png` 中细长结构连续性和误分到 T 管的情况。
+- 未标区域、保留AI对象、选模偏倚、历史checkpoint/纹理分类器潜在训练重叠限制结果解释，不能称临床准确率或严格外部泛化。
+- 精确复现实验需授权数据、原始划分及对应折checkpoint；代码可用不意味着公开数据齐备。
+- 未重新长训，检查范围见[HANDOFF](docs/HANDOFF.md)；历史报告脚本依赖历史产物。
+- 不纳入无关旧WSI工程、厂商二进制及患者目录；非jijie数据集的旧路径不在本次支持范围。
+- 新分支目录移除旧数据，但**Git历史仍含旧数据**，未擅自改写历史或强推。浅克隆不等于消除历史隐私风险。
+- 代码及模型再分发/商业使用权限需负责人确认，本次不凭空授予许可。

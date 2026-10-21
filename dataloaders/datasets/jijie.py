@@ -38,12 +38,22 @@ def _normalize_selected_classes(selected_classes):
 class JijieSegmentation(Dataset):
     NUM_CLASSES = len(CLASS_NAMES)
 
-    def __init__(self, args, base_dir=Path.db_root_dir("jijie"), split="train"):
+    def __init__(self, args, base_dir=None, split="train"):
         super().__init__()
         self.args = args
-        self._base_dir = base_dir
+        self._base_dir = base_dir or getattr(args, "data_root", None) or Path.db_root_dir("jijie")
         self._image_dir = os.path.join(self._base_dir, "JPEGImages")
-        self._cat_dir = os.path.join(self._base_dir, "SegmentationClass")
+        is_train_split = "train" in ([split] if isinstance(split, str) else split)
+        mask_dir_option = "train_mask_dir" if is_train_split else "eval_mask_dir"
+        default_mask_dir = os.path.join(self._base_dir, "SegmentationClass")
+        self._cat_dir = self._resolve_data_dir(getattr(args, mask_dir_option, None), default_mask_dir)
+        self.use_supervision_weights = bool(getattr(args, "use_supervision_weights", False))
+        default_weight_dir = os.path.join(
+            self._base_dir,
+            getattr(args, "supervision_weight_dir", "SupervisionWeight"),
+        )
+        weight_dir_option = "train_supervision_weight_dir" if is_train_split else "eval_supervision_weight_dir"
+        self._weight_dir = self._resolve_data_dir(getattr(args, weight_dir_option, None), default_weight_dir)
         self._default_splits_dir = os.path.join(self._base_dir, "ImageSets", "Segmentation")
 
         if isinstance(split, str):
@@ -67,6 +77,8 @@ class JijieSegmentation(Dataset):
             )
         if not os.path.isdir(self._cat_dir):
             raise FileNotFoundError("Missing jijie mask directory: {}".format(self._cat_dir))
+        if self.use_supervision_weights and not os.path.isdir(self._weight_dir):
+            raise FileNotFoundError("Missing supervision-weight directory: {}".format(self._weight_dir))
 
         if self.selected_classes is not None:
             self.class_mapping = {0: 0}
@@ -78,6 +90,7 @@ class JijieSegmentation(Dataset):
         self.im_ids = []
         self.images = []
         self.categories = []
+        self.supervision_weights = []
 
         for split_name in self.split:
             split_file = self._resolve_split_file(split_name)
@@ -91,9 +104,13 @@ class JijieSegmentation(Dataset):
                     raise FileNotFoundError("Missing image file: {}".format(image_path))
                 if not os.path.isfile(mask_path):
                     raise FileNotFoundError("Missing mask file: {}".format(mask_path))
+                weight_path = os.path.join(self._weight_dir, image_id + ".png")
+                if self.use_supervision_weights and not os.path.isfile(weight_path):
+                    raise FileNotFoundError("Missing supervision-weight file: {}".format(weight_path))
                 self.im_ids.append(image_id)
                 self.images.append(image_path)
                 self.categories.append(mask_path)
+                self.supervision_weights.append(weight_path if self.use_supervision_weights else None)
 
         assert len(self.images) == len(self.categories)
         print(
@@ -107,6 +124,14 @@ class JijieSegmentation(Dataset):
                 len(self.images),
             )
         )
+
+    def _resolve_data_dir(self, configured_dir, default_dir):
+        if not configured_dir:
+            return default_dir
+        configured_dir = str(configured_dir)
+        if os.path.isabs(configured_dir):
+            return configured_dir
+        return os.path.join(self._base_dir, configured_dir)
 
     def _resolve_split_file(self, split_name):
         if self.manifest_dir:
@@ -130,7 +155,7 @@ class JijieSegmentation(Dataset):
         return len(self.images)
 
     def __getitem__(self, index):
-        image, target = self._make_img_gt_point_pair(index)
+        image, target, supervision_weight = self._make_img_gt_point_pair(index)
         sample = {
             "image": image,
             "label": target,
@@ -140,6 +165,8 @@ class JijieSegmentation(Dataset):
             "original_size": image.size[::-1],
             "task_name": self.task_name or "",
         }
+        if supervision_weight is not None:
+            sample["supervision_weight"] = supervision_weight
 
         if "train" in self.split:
             return self.transform_tr(sample)
@@ -148,9 +175,12 @@ class JijieSegmentation(Dataset):
     def _make_img_gt_point_pair(self, index):
         image = Image.open(self.images[index]).convert("RGB")
         target = Image.open(self.categories[index])
+        supervision_weight = None
+        if self.supervision_weights[index] is not None:
+            supervision_weight = Image.open(self.supervision_weights[index]).convert("L")
         if self.class_mapping is not None:
             target = self._remap_classes(target)
-        return image, target
+        return image, target, supervision_weight
 
     def _remap_classes(self, target_pil):
         target_array = np.array(target_pil)
@@ -163,6 +193,7 @@ class JijieSegmentation(Dataset):
         for old_class in self.class_mapping.keys():
             selected_mask |= target_array == old_class
         new_target[~selected_mask] = 0
+        new_target[target_array == 255] = 255
         return Image.fromarray(new_target.astype(np.uint8))
 
     def _build_resize_transform(self, train):
@@ -233,7 +264,14 @@ class JijieSegmentation(Dataset):
         if getattr(self.args, "train_rotate_degree", 0):
             transforms_list.append(tr.RandomRotate(self.args.train_rotate_degree))
 
-        resize_transform = self._build_resize_transform(train=True)
+        if getattr(self.args, "train_focus_valid_labels", False):
+            resize_transform = tr.RandomValidCropPad(
+                self.args.crop_size,
+                ignore_index=getattr(self.args, "partial_label_ignore_index", 255),
+                fill=getattr(self.args, "partial_label_ignore_index", 255),
+            )
+        else:
+            resize_transform = self._build_resize_transform(train=True)
         if resize_transform is not None:
             transforms_list.append(resize_transform)
 

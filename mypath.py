@@ -32,10 +32,7 @@ class Path(object):
         elif dataset == 'prostate_tls':
             return r'D:\msqtry\region_level_train\EVAL_WSI_1GPU\patch384_lap192_2000_level3'
         elif dataset == 'jijie':
-            project_dataset = Path._project_data_path('data', 'jijie')
-            if os.path.isdir(project_dataset):
-                return project_dataset
-            return r'D:\msqtry\muscle indicator\patch_pengzhang'
+            return os.environ.get('JIJIE_DATA_ROOT', Path._project_data_path('data', 'jijie'))
         else:
             print('Dataset {} not available.'.format(dataset))
             raise NotImplementedError

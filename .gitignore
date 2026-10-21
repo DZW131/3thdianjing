@@ -15,3 +15,44 @@ data/jijie/JPEGImages/
 *.pth.tar
 data/jijie/metadata/data_usability_audit*
 data/jijie/metadata/manual_review_checklist*
+# Private datasets, annotations, credentials and machine-local artifacts
+/data/
+/newdata/
+/.codex_ssh/
+/.workbuddy/
+/.env*
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+*.db
+*.sqlite*
+*.tif
+*.tiff
+*.svs
+*.zip
+*.tar
+*.tar.gz
+*.pth
+*.pt
+*.pkl
+*.npy
+*.npz
+*.docx
+*.pdf
+/EVAL_WSI_/
+/jijie json*/
+/doctor_*/
+/server_artifacts/
+/tmp*/
+/logs/
+/venv/
+/nnunet_experiment*/
+/lmcf_mito_analysis/
+/615test_mitochondria.py
+/test_mitochondria.py
+/json modify.py
+/train_jijie.txt
+/JIJIE_IMPLEMENTATION_PLAN.md
+*备份*
+*澶囦唤*

@@ -1,0 +1,18 @@
+# Observed working Linux Python 3.10 environment, 2026-10-20.
+# Install torch==2.11.0 and torchvision==0.26.0 from the cu128 index first.
+numpy==2.2.6
+scipy==1.15.3
+Pillow==11.3.0
+tqdm==4.68.3
+matplotlib==3.10.9
+seaborn==0.13.2
+tensorboard==2.21.0
+opencv-python-headless==5.0.0.93
+scikit-image==0.25.2
+scikit-learn==1.7.2
+joblib==1.5.3
+PyWavelets==1.8.0
+pandas==2.3.3
+shapely==2.1.2
+tifffile==2025.5.10
+pytesseract==0.3.13

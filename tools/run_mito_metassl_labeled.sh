@@ -4,6 +4,9 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${PROJECT_ROOT}"
 
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate dianjing5090
+
 mkdir -p logs
 
 TRAIN_LOG="logs/train_mito_v0_6_metassl_labeled.log"
@@ -12,7 +15,6 @@ EVAL_LOG="logs/eval_mito_v0_6_metassl_labeled.log"
 echo "[MetaSSL] training mito labeled-only experiment..."
 nohup python train.py \
   --config configs/mito/mito_v0_6_metassl_labeled.json \
-  --no-progress \
   > "${TRAIN_LOG}" 2>&1 &
 
 TRAIN_PID=$!

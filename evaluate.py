@@ -23,7 +23,7 @@ from utils.jijie.inference import predict_logits
 from utils.jijie.partial_label_metrics import aggregate_gt_overlap_rows, compute_gt_overlap_rows
 from utils.jijie.postprocess import postprocess_mito_mask, DEFAULT_CLASSIFIER_PATH
 from utils.jijie.quantify import quantify_task_prediction
-from utils.jijie.scale_bar import resolve_um_per_pixel
+from utils.jijie.scale_bar import load_scale_calibration, resolve_um_per_pixel
 from utils.jijie.visualization import (
     blend_mask,
     colorize_mask,
@@ -162,6 +162,10 @@ class SegmentationEvaluator(object):
             self.model = self.model.cuda()
         self.model.eval()
         self.evaluator = Evaluator(self.nclass)
+        self.scale_calibration = load_scale_calibration(getattr(args, "scale_calibration_csv", None))
+        if self.scale_calibration:
+            print("[ScaleBar] loaded {} calibration rows from {}".format(
+                len(self.scale_calibration.get("rows", [])), args.scale_calibration_csv))
         if self.args.partial_label_class_ids is None:
             fallback_class_ids = self.args.quantify_class_ids or self.args.metric_target_class_ids
             if fallback_class_ids:
@@ -255,17 +259,27 @@ class SegmentationEvaluator(object):
                             )
                         )
 
-                if self.args.quantify_class_ids:
+                if self.args.quantify_class_ids and not getattr(self.args, "partial_label_supervision", False):
                     batch_size = pred_np.shape[0]
                     for batch_index in range(batch_size):
                         sample_id = sample.get("sample_id", ["sample"])[batch_index]
                         sample_um_per_pixel = self.args.um_per_pixel
                         scale_bar_info = None
-                        if self.args.auto_scale_bar:
-                            gray_for_scale = self._load_gray_image(sample, batch_index)
-                            if gray_for_scale is not None:
-                                sample_um_per_pixel, scale_bar_info = resolve_um_per_pixel(
-                                    self.args, gray_image=gray_for_scale)
+                        should_resolve_scale = (
+                            self.args.auto_scale_bar
+                            or self.args.scale_calibration_csv
+                            or self.args.um_per_pixel is not None
+                        )
+                        if should_resolve_scale:
+                            gray_for_scale = None
+                            if self.args.auto_scale_bar or self.args.scale_calibration_csv:
+                                gray_for_scale = self._load_gray_image(sample, batch_index)
+                            sample_um_per_pixel, scale_bar_info = resolve_um_per_pixel(
+                                self.args,
+                                gray_image=gray_for_scale,
+                                sample_id=sample_id,
+                                calibration=self.scale_calibration,
+                            )
                         image_summary, sample_object_rows, sample_detection_rows, sample_class_rows = quantify_task_prediction(
                             task_name=getattr(self.args, "task_name", "jijie"),
                             gt_mask=target_np[batch_index].astype(np.int32),
@@ -277,9 +291,16 @@ class SegmentationEvaluator(object):
                             return_class_rows=True,
                         )
                         if scale_bar_info is not None:
-                            image_summary["scale_bar_px"] = scale_bar_info["width"]
-                            image_summary["scale_bar_um"] = scale_bar_info["scale_bar_um"]
-                            image_summary["um_per_pixel"] = scale_bar_info["um_per_pixel"]
+                            if scale_bar_info.get("width") is not None:
+                                image_summary["scale_bar_px"] = scale_bar_info.get("width")
+                            elif scale_bar_info.get("scale_bar_px") is not None:
+                                image_summary["scale_bar_px"] = scale_bar_info.get("scale_bar_px")
+                            if scale_bar_info.get("scale_bar_um") is not None:
+                                image_summary["scale_bar_um"] = scale_bar_info.get("scale_bar_um")
+                            if scale_bar_info.get("um_per_pixel") is not None:
+                                image_summary["um_per_pixel"] = scale_bar_info.get("um_per_pixel")
+                            if scale_bar_info.get("method") is not None:
+                                image_summary["scale_bar_method"] = scale_bar_info.get("method")
                         elif sample_um_per_pixel is not None:
                             image_summary["um_per_pixel"] = sample_um_per_pixel
                         image_rows.append(image_summary)
@@ -315,12 +336,14 @@ class SegmentationEvaluator(object):
             }
             print("[Postprocess] unified {} instances, refined {} instances across {} images".format(
                 unified_total, refined_total, len(postprocess_stats)))
-        if self.args.auto_scale_bar and image_rows:
+        if (self.args.auto_scale_bar or self.args.scale_calibration_csv) and image_rows:
             scale_rows = [r for r in image_rows if r.get("scale_bar_px") is not None]
             umpp_values = [r.get("um_per_pixel") for r in image_rows if r.get("um_per_pixel") is not None]
             summary["scale_bar"] = {
                 "auto_detected": len(scale_rows),
+                "resolved": len(umpp_values),
                 "total_images": len(image_rows),
+                "calibration_csv": self.args.scale_calibration_csv,
                 "mean_um_per_pixel": float(np.mean(umpp_values)) if umpp_values else None,
                 "std_um_per_pixel": float(np.std(umpp_values)) if umpp_values else None,
             }
@@ -548,7 +571,10 @@ def build_parser():
     parser.add_argument("--out-stride", type=int, default=16, help="network output stride")
     parser.add_argument("--dataset", type=str, default="jijie", help="dataset name")
     parser.add_argument("--task-name", type=str, default=None, help="logical jijie task name")
+    parser.add_argument("--data-root", type=str, default=None, help="optional prepared Jijie dataset root")
     parser.add_argument("--manifest-dir", type=str, default=None, help="directory that contains train.txt / val.txt / test.txt manifests")
+    parser.add_argument("--train-mask-dir", type=str, default=None, help="optional mask directory used only by the training split")
+    parser.add_argument("--eval-mask-dir", type=str, default=None, help="optional mask directory used only by validation and test splits")
     parser.add_argument("--split", type=str, default="test", choices=["train", "val", "test"], help="dataset split")
     parser.add_argument("--workers", type=int, default=4, metavar="N", help="dataloader threads")
     parser.add_argument("--base-size", type=int, default=512, help="base image size")
@@ -579,11 +605,17 @@ def build_parser():
     parser.add_argument("--um-per-pixel", type=float, default=None, help="pixel size used for um and um2 quantification")
     parser.add_argument("--auto-scale-bar", action="store_true", default=False, help="auto-detect scale bar from image and compute um/pixel")
     parser.add_argument("--scale-bar-um", type=float, default=1.0, help="physical length the scale bar represents in um (default 1.0)")
+    parser.add_argument("--scale-calibration-csv", type=str, default=None, help="optional CSV with per-sample or per-group scale calibration")
     parser.add_argument("--postprocess-mito", action="store_true", default=False, help="apply instance unification + texture classifier post-processing to mito task predictions")
+    parser.add_argument("--use-supervision-weights", action="store_true", default=False, help="read per-pixel provenance weights alongside masks")
+    parser.add_argument("--supervision-weight-dir", type=str, default="SupervisionWeight", help="relative directory under data_root containing supervision-weight PNGs")
+    parser.add_argument("--train-supervision-weight-dir", type=str, default=None, help="optional supervision-weight directory used only by the training split")
+    parser.add_argument("--eval-supervision-weight-dir", type=str, default=None, help="optional supervision-weight directory used only by validation and test splits")
     parser.add_argument("--postprocess-classifier", type=str, default=DEFAULT_CLASSIFIER_PATH, help="path to trained texture classifier pkl for mito post-processing")
     parser.add_argument("--partial-label-eval", action="store_true", default=False, help="evaluate only predicted components that overlap same-class GT")
     parser.add_argument("--partial-label-classes", type=str, default=None, help="comma-separated remapped class ids for partial-label evaluation; defaults to quantify classes")
     parser.add_argument("--partial-label-overlap-min-pixels", type=int, default=1, help="minimum same-class GT overlap pixels required to evaluate a predicted component")
+    parser.add_argument("--partial-label-supervision", action="store_true", default=False, help="skip object-level GT quantification for masks with ignored unreviewed pixels")
     parser.add_argument("--visualize", action="store_true", default=False, help="save sample prediction figures")
     parser.add_argument("--num-vis-samples", type=int, default=10, help="number of samples to visualize")
     parser.add_argument("--no-progress", action="store_true", default=False, help="disable tqdm progress bars")

@@ -132,6 +132,10 @@ def finalize_jijie_args(args):
 
     if getattr(args, "manifest_dir", None):
         args.manifest_dir = _resolve_path(args.manifest_dir)
+    if getattr(args, "data_root", None):
+        args.data_root = _resolve_path(args.data_root)
+    if getattr(args, "metassl_unlabeled_manifest_dir", None):
+        args.metassl_unlabeled_manifest_dir = _resolve_path(args.metassl_unlabeled_manifest_dir)
 
     if getattr(args, "config", None):
         args.config = _resolve_path(args.config)
@@ -255,15 +259,27 @@ def summarize_jijie_run(args):
         )
     if getattr(args, "enable_metassl_labeled", False):
         lines.append(
-            "[Task] metassl_labeled=on weight={} warmup={} beta={} delta_l={} ema_alpha={} min_region_weight={} protect_positive={} positive_min={}".format(
+            "[Task] metassl_labeled=on weight={} warmup={} beta={} delta_l={} threshold_ema={} reference={} teacher_decay={} dice_weight={} protect_positive={} positive_min={}".format(
                 getattr(args, "metassl_labeled_weight", 1.0),
                 getattr(args, "metassl_labeled_warmup_epochs", 0),
                 getattr(args, "metassl_beta", 3.0),
                 getattr(args, "metassl_delta_l", 0.6),
                 getattr(args, "metassl_ema_alpha", 0.99),
-                getattr(args, "metassl_min_region_weight", 0.05),
+                getattr(args, "metassl_reference_mode", "rdrop"),
+                getattr(args, "metassl_ema_teacher_decay", 0.99),
+                getattr(args, "metassl_labeled_dice_weight", 0.0),
                 getattr(args, "metassl_protect_positive_labels", False),
                 getattr(args, "metassl_positive_label_min_weight", 0.8),
+            )
+        )
+    if getattr(args, "enable_metassl_unlabeled", False):
+        lines.append(
+            "[Task] metassl_unlabeled=on weight={} warmup={} delta_u={} splits={} manifest={}".format(
+                getattr(args, "metassl_unlabeled_weight", 0.0),
+                getattr(args, "metassl_unlabeled_warmup_epochs", 0),
+                getattr(args, "metassl_delta_u", 0.3),
+                getattr(args, "metassl_unlabeled_splits", None),
+                getattr(args, "metassl_unlabeled_manifest_dir", None) or getattr(args, "manifest_dir", None) or "default",
             )
         )
     return lines

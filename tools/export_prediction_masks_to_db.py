@@ -11,9 +11,11 @@ from PIL import Image
 from scipy import ndimage
 
 try:
-    from skimage import measure
+    from skimage import feature, measure, segmentation
 except ImportError:
+    feature = None
     measure = None
+    segmentation = None
 
 
 CLASS_INFO = {
@@ -233,6 +235,124 @@ def iter_components(mask, class_id, min_area, simplify_epsilon, max_points):
         points = component_to_contour(component, simplify_epsilon=simplify_epsilon, max_points=max_points)
         if len(points) >= 3:
             yield area, points
+
+
+def split_mito_instances(
+    postprocessed_mask,
+    mito_classes=(1, 2, 3, 4),
+    min_area=30,
+    min_distance=12,
+):
+    """Split touching post-processed mitochondria into editable instances.
+
+    The semantic classes in ``postprocessed_mask`` are not recalculated here.
+    This routine only partitions the existing mitochondrial foreground with a
+    distance-transform watershed, then assigns every instance the majority
+    class already present in that post-processed mask.  It is therefore an
+    export-time object separation step, not a replacement for model inference
+    or mitochondrial post-processing.
+
+    Returns
+    -------
+    class_mask : ndarray
+        Existing post-processed classes restricted to retained instances.
+    instance_labels : ndarray
+        Consecutive instance IDs; zero is background.
+    stats : dict
+        Counts useful for export manifests and visual quality control.
+    """
+    if feature is None or segmentation is None:
+        raise RuntimeError("scikit-image is required for watershed instance export")
+
+    postprocessed_mask = np.asarray(postprocessed_mask)
+    mitochondrial = np.isin(postprocessed_mask, mito_classes)
+    # Four-connectivity prevents diagonal-only pixels becoming one editable object.
+    source_labels, source_count = ndimage.label(
+        mitochondrial, structure=ndimage.generate_binary_structure(2, 1)
+    )
+    source_slices = ndimage.find_objects(source_labels)
+    class_mask = np.zeros_like(postprocessed_mask)
+    instance_labels = np.zeros(postprocessed_mask.shape, dtype=np.int32)
+    next_instance_id = 1
+    split_source_components = 0
+    discarded_instances = 0
+
+    for source_id, component_slice in enumerate(source_slices, start=1):
+        if component_slice is None:
+            continue
+        component = source_labels[component_slice] == source_id
+        component_area = int(component.sum())
+        if component_area < min_area:
+            discarded_instances += 1
+            continue
+
+        distance = ndimage.distance_transform_edt(component)
+        peaks = feature.peak_local_max(
+            distance,
+            labels=component,
+            min_distance=max(1, int(min_distance)),
+            exclude_border=False,
+        )
+
+        if len(peaks) <= 1:
+            child_labels = component.astype(np.int32)
+        else:
+            markers = np.zeros(component.shape, dtype=np.int32)
+            markers[tuple(peaks.T)] = np.arange(1, len(peaks) + 1, dtype=np.int32)
+            child_labels = segmentation.watershed(-distance, markers, mask=component)
+            split_source_components += 1
+
+        source_class_mask = postprocessed_mask[component_slice]
+        output_class_mask = class_mask[component_slice]
+        output_instance_labels = instance_labels[component_slice]
+        for child_id in range(1, int(child_labels.max()) + 1):
+            child = child_labels == child_id
+            child_area = int(child.sum())
+            if child_area < min_area:
+                discarded_instances += 1
+                continue
+            class_pixels = source_class_mask[child]
+            votes = np.bincount(class_pixels.astype(np.intp), minlength=max(mito_classes) + 1)
+            class_id = max(mito_classes, key=lambda candidate: (int(votes[candidate]), -candidate))
+            output_class_mask[child] = class_id
+            output_instance_labels[child] = next_instance_id
+            next_instance_id += 1
+
+    stats = {
+        "source_components_4_connected": int(source_count),
+        "watershed_split_source_components": int(split_source_components),
+        "exported_instances": int(next_instance_id - 1),
+        "discarded_small_components_or_children": int(discarded_instances),
+    }
+    return class_mask, instance_labels, stats
+
+
+def iter_mito_instances(
+    postprocessed_mask,
+    min_area,
+    min_distance,
+    simplify_epsilon,
+    max_points,
+    mito_classes=(1, 2, 3, 4),
+):
+    """Yield one contour per watershed-separated post-processed mitochondrion."""
+    class_mask, instance_labels, stats = split_mito_instances(
+        postprocessed_mask,
+        mito_classes=mito_classes,
+        min_area=min_area,
+        min_distance=min_distance,
+    )
+    for instance_id in range(1, int(instance_labels.max()) + 1):
+        component = instance_labels == instance_id
+        class_id = int(class_mask[component][0])
+        points = component_to_contour(
+            component,
+            simplify_epsilon=simplify_epsilon,
+            max_points=max_points,
+        )
+        if len(points) >= 3:
+            yield class_id, int(component.sum()), points
+    return stats
 
 
 def create_empty_db(path):

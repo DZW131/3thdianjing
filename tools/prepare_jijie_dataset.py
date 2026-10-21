@@ -52,7 +52,7 @@ def parse_args():
     )
     parser.add_argument(
         "--input-root",
-        default=r"F:\fenge_datasets",
+        required=True,
         help="Root containing cases_export_* folders.",
     )
     parser.add_argument(

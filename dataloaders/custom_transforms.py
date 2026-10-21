@@ -5,10 +5,15 @@ import torch
 from PIL import Image, ImageFilter, ImageOps
 
 
-def _clone_sample(sample, image, label):
+_UNSET = object()
+
+
+def _clone_sample(sample, image, label, supervision_weight=_UNSET):
     cloned = dict(sample)
     cloned["image"] = image
     cloned["label"] = label
+    if supervision_weight is not _UNSET and (supervision_weight is not None or "supervision_weight" in sample):
+        cloned["supervision_weight"] = supervision_weight
     return cloned
 
 
@@ -30,10 +35,15 @@ class ToTensor(object):
     def __call__(self, sample):
         img = np.array(sample["image"]).astype(np.float32).transpose((2, 0, 1))
         mask = np.array(sample["label"]).astype(np.float32)
+        supervision_weight = sample.get("supervision_weight")
+        if supervision_weight is not None:
+            supervision_weight = np.array(supervision_weight).astype(np.float32) / 255.0
+            supervision_weight = torch.from_numpy(supervision_weight).float()
         return _clone_sample(
             sample,
             torch.from_numpy(img).float(),
             torch.from_numpy(mask).float(),
+            supervision_weight=supervision_weight,
         )
 
 
@@ -41,20 +51,26 @@ class RandomHorizontalFlip(object):
     def __call__(self, sample):
         img = sample["image"]
         mask = sample["label"]
+        supervision_weight = sample.get("supervision_weight")
         if random.random() < 0.5:
             img = img.transpose(Image.FLIP_LEFT_RIGHT)
             mask = mask.transpose(Image.FLIP_LEFT_RIGHT)
-        return _clone_sample(sample, img, mask)
+            if supervision_weight is not None:
+                supervision_weight = supervision_weight.transpose(Image.FLIP_LEFT_RIGHT)
+        return _clone_sample(sample, img, mask, supervision_weight=supervision_weight)
 
 
 class RandomVerticalFlip(object):
     def __call__(self, sample):
         img = sample["image"]
         mask = sample["label"]
+        supervision_weight = sample.get("supervision_weight")
         if random.random() < 0.5:
             img = img.transpose(Image.FLIP_TOP_BOTTOM)
             mask = mask.transpose(Image.FLIP_TOP_BOTTOM)
-        return _clone_sample(sample, img, mask)
+            if supervision_weight is not None:
+                supervision_weight = supervision_weight.transpose(Image.FLIP_TOP_BOTTOM)
+        return _clone_sample(sample, img, mask, supervision_weight=supervision_weight)
 
 
 class RandomRotate(object):
@@ -64,10 +80,13 @@ class RandomRotate(object):
     def __call__(self, sample):
         img = sample["image"]
         mask = sample["label"]
+        supervision_weight = sample.get("supervision_weight")
         rotate_degree = random.uniform(-1 * self.degree, self.degree)
         img = img.rotate(rotate_degree, Image.BILINEAR)
         mask = mask.rotate(rotate_degree, Image.NEAREST)
-        return _clone_sample(sample, img, mask)
+        if supervision_weight is not None:
+            supervision_weight = supervision_weight.rotate(rotate_degree, Image.NEAREST, fillcolor=0)
+        return _clone_sample(sample, img, mask, supervision_weight=supervision_weight)
 
 
 class RandomGaussianBlur(object):
@@ -87,6 +106,7 @@ class RandomScaleCrop(object):
     def __call__(self, sample):
         img = sample["image"]
         mask = sample["label"]
+        supervision_weight = sample.get("supervision_weight")
 
         short_size = random.randint(int(self.base_size * 0.5), int(self.base_size * 2.0))
         width, height = img.size
@@ -99,19 +119,25 @@ class RandomScaleCrop(object):
 
         img = img.resize((out_width, out_height), Image.BILINEAR)
         mask = mask.resize((out_width, out_height), Image.NEAREST)
+        if supervision_weight is not None:
+            supervision_weight = supervision_weight.resize((out_width, out_height), Image.NEAREST)
 
         if short_size < self.crop_size:
             pad_height = self.crop_size - out_height if out_height < self.crop_size else 0
             pad_width = self.crop_size - out_width if out_width < self.crop_size else 0
             img = ImageOps.expand(img, border=(0, 0, pad_width, pad_height), fill=0)
             mask = ImageOps.expand(mask, border=(0, 0, pad_width, pad_height), fill=self.fill)
+            if supervision_weight is not None:
+                supervision_weight = ImageOps.expand(supervision_weight, border=(0, 0, pad_width, pad_height), fill=0)
 
         width, height = img.size
         x1 = random.randint(0, width - self.crop_size)
         y1 = random.randint(0, height - self.crop_size)
         img = img.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
         mask = mask.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
-        return _clone_sample(sample, img, mask)
+        if supervision_weight is not None:
+            supervision_weight = supervision_weight.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
+        return _clone_sample(sample, img, mask, supervision_weight=supervision_weight)
 
 
 class RandomCropPad(object):
@@ -122,6 +148,7 @@ class RandomCropPad(object):
     def __call__(self, sample):
         img = sample["image"]
         mask = sample["label"]
+        supervision_weight = sample.get("supervision_weight")
 
         width, height = img.size
         pad_width = max(0, self.crop_size - width)
@@ -129,13 +156,60 @@ class RandomCropPad(object):
         if pad_width or pad_height:
             img = ImageOps.expand(img, border=(0, 0, pad_width, pad_height), fill=0)
             mask = ImageOps.expand(mask, border=(0, 0, pad_width, pad_height), fill=self.fill)
+            if supervision_weight is not None:
+                supervision_weight = ImageOps.expand(supervision_weight, border=(0, 0, pad_width, pad_height), fill=0)
 
         width, height = img.size
         x1 = random.randint(0, max(0, width - self.crop_size))
         y1 = random.randint(0, max(0, height - self.crop_size))
         img = img.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
         mask = mask.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
-        return _clone_sample(sample, img, mask)
+        if supervision_weight is not None:
+            supervision_weight = supervision_weight.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
+        return _clone_sample(sample, img, mask, supervision_weight=supervision_weight)
+
+
+class RandomValidCropPad(RandomCropPad):
+    """Crop partial-label samples around a supervised pixel when possible."""
+
+    def __init__(self, crop_size, ignore_index=255, fill=0):
+        super().__init__(crop_size=crop_size, fill=fill)
+        self.ignore_index = int(ignore_index)
+
+    def __call__(self, sample):
+        img = sample["image"]
+        mask = sample["label"]
+        supervision_weight = sample.get("supervision_weight")
+
+        width, height = img.size
+        pad_width = max(0, self.crop_size - width)
+        pad_height = max(0, self.crop_size - height)
+        if pad_width or pad_height:
+            img = ImageOps.expand(img, border=(0, 0, pad_width, pad_height), fill=0)
+            mask = ImageOps.expand(mask, border=(0, 0, pad_width, pad_height), fill=self.fill)
+            if supervision_weight is not None:
+                supervision_weight = ImageOps.expand(supervision_weight, border=(0, 0, pad_width, pad_height), fill=0)
+            width, height = img.size
+
+        mask_array = np.asarray(mask)
+        valid_y, valid_x = np.where(mask_array != self.ignore_index)
+        if valid_x.size == 0 or valid_x.size == mask_array.size:
+            return super().__call__(_clone_sample(sample, img, mask, supervision_weight=supervision_weight))
+
+        chosen = random.randrange(valid_x.size)
+        center_x = int(valid_x[chosen])
+        center_y = int(valid_y[chosen])
+        min_x = max(0, center_x - self.crop_size + 1)
+        max_x = min(width - self.crop_size, center_x)
+        min_y = max(0, center_y - self.crop_size + 1)
+        max_y = min(height - self.crop_size, center_y)
+        x1 = random.randint(min_x, max_x)
+        y1 = random.randint(min_y, max_y)
+        img = img.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
+        mask = mask.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
+        if supervision_weight is not None:
+            supervision_weight = supervision_weight.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
+        return _clone_sample(sample, img, mask, supervision_weight=supervision_weight)
 
 
 class FixScaleCrop(object):
@@ -145,6 +219,7 @@ class FixScaleCrop(object):
     def __call__(self, sample):
         img = sample["image"]
         mask = sample["label"]
+        supervision_weight = sample.get("supervision_weight")
         width, height = img.size
         if width > height:
             out_height = self.crop_size
@@ -154,13 +229,17 @@ class FixScaleCrop(object):
             out_height = int(1.0 * height * out_width / width)
         img = img.resize((out_width, out_height), Image.BILINEAR)
         mask = mask.resize((out_width, out_height), Image.NEAREST)
+        if supervision_weight is not None:
+            supervision_weight = supervision_weight.resize((out_width, out_height), Image.NEAREST)
 
         width, height = img.size
         x1 = int(round((width - self.crop_size) / 2.0))
         y1 = int(round((height - self.crop_size) / 2.0))
         img = img.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
         mask = mask.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
-        return _clone_sample(sample, img, mask)
+        if supervision_weight is not None:
+            supervision_weight = supervision_weight.crop((x1, y1, x1 + self.crop_size, y1 + self.crop_size))
+        return _clone_sample(sample, img, mask, supervision_weight=supervision_weight)
 
 
 class ResizeLongestSideAndPad(object):
@@ -171,6 +250,7 @@ class ResizeLongestSideAndPad(object):
     def __call__(self, sample):
         img = sample["image"]
         mask = sample["label"]
+        supervision_weight = sample.get("supervision_weight")
 
         width, height = img.size
         scale = float(self.size) / float(max(width, height))
@@ -179,16 +259,23 @@ class ResizeLongestSideAndPad(object):
 
         img = img.resize((new_width, new_height), Image.BILINEAR)
         mask = mask.resize((new_width, new_height), Image.NEAREST)
+        if supervision_weight is not None:
+            supervision_weight = supervision_weight.resize((new_width, new_height), Image.NEAREST)
 
         canvas_img = Image.new("RGB", (self.size, self.size), 0)
         canvas_mask = Image.new(mask.mode, (self.size, self.size), self.fill)
+        canvas_weight = None
+        if supervision_weight is not None:
+            canvas_weight = Image.new(supervision_weight.mode, (self.size, self.size), 0)
 
         offset_x = (self.size - new_width) // 2
         offset_y = (self.size - new_height) // 2
         canvas_img.paste(img, (offset_x, offset_y))
         canvas_mask.paste(mask, (offset_x, offset_y))
+        if canvas_weight is not None:
+            canvas_weight.paste(supervision_weight, (offset_x, offset_y))
 
-        return _clone_sample(sample, canvas_img, canvas_mask)
+        return _clone_sample(sample, canvas_img, canvas_mask, supervision_weight=canvas_weight)
 
 
 class FixedResize(object):
@@ -198,9 +285,12 @@ class FixedResize(object):
     def __call__(self, sample):
         img = sample["image"]
         mask = sample["label"]
+        supervision_weight = sample.get("supervision_weight")
         img = img.resize(self.size, Image.BILINEAR)
         mask = mask.resize(self.size, Image.NEAREST)
-        return _clone_sample(sample, img, mask)
+        if supervision_weight is not None:
+            supervision_weight = supervision_weight.resize(self.size, Image.NEAREST)
+        return _clone_sample(sample, img, mask, supervision_weight=supervision_weight)
 
 
 class DilateMaskClasses(object):

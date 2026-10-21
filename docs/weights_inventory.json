@@ -1,0 +1,242 @@
+[
+  {
+    "path": "run/jijie/jijie_mito_sr_v0_5_final200_5090_retrain/model_best.pth.tar",
+    "size_bytes": 475509822,
+    "sha256": "2d18f6a57336f42cdf5bf1ab13d411ab7e7c20d3c9e9765304f4cf9f8c59b23d",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_sr_v0_5_final200_5090_tversky/model_best.pth.tar",
+    "size_bytes": 475509822,
+    "sha256": "47b25337474b245d0d17f08cedbb4cc36c71f9c34b20314afbc2d7849566c659",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_10_revised52_multisource_cv5_fold_00/model_best.pth.tar",
+    "size_bytes": 474996336,
+    "sha256": "28270eac1061727c70f05fdde9f4e5970a9daa26e19ca0bd14038407547594b3",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_10_revised52_multisource_cv5_fold_01/model_best.pth.tar",
+    "size_bytes": 474996336,
+    "sha256": "021968398bb60161896d0a068214cb8265d051f87f07576eaa8cce7354ced828",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_10_revised52_multisource_cv5_fold_02/model_best.pth.tar",
+    "size_bytes": 474996336,
+    "sha256": "e9e20758588c3d2abd1e34fc6b1f059fcb30660a22678ad29333ce5bfcac4e5f",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_10_revised52_multisource_cv5_fold_03/model_best.pth.tar",
+    "size_bytes": 474996336,
+    "sha256": "49bb27b69fa3ac8014e22e06c9725e7c14cc5368195eb1f7c1183e7054d504ac",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_10_revised52_multisource_cv5_fold_04/model_best.pth.tar",
+    "size_bytes": 474996336,
+    "sha256": "da4620fe5f3c876e851ba05cec0d7bbc16b79a37e4445851d313df190b7b0a98",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_11_revised52_strict_selection_cv5_fold_00/model_best.pth.tar",
+    "size_bytes": 474996336,
+    "sha256": "2df9f3c296fbcdec78297da49cecb9c8671fd045ad575adab098c25c4d74989f",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_11_revised52_strict_selection_cv5_fold_01/model_best.pth.tar",
+    "size_bytes": 474996336,
+    "sha256": "6d2bdb2d7a1c7e7c0214de52f7df86ec1ca5af3ab3179c4e6dffcd3e743af0e8",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_11_revised52_strict_selection_cv5_fold_02/model_best.pth.tar",
+    "size_bytes": 474996336,
+    "sha256": "2406e8ffb1e0e83af676ca60297d0e602f5b99bdfbefb1937f50cf09fb783afb",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_11_revised52_strict_selection_cv5_fold_03/model_best.pth.tar",
+    "size_bytes": 474996336,
+    "sha256": "2dd8dc5bf183a3a7d7e13440abedc48f0783c10c82dc853addb8826680d3d0ef",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_11_revised52_strict_selection_cv5_fold_04/model_best.pth.tar",
+    "size_bytes": 474996336,
+    "sha256": "bc158c233ece15dc0ab0bba0886668dc25f1cf3efac220b3967e2948b239ee3b",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_12_revised52_consensus_cv5_fold_00/model_best.pth.tar",
+    "size_bytes": 474996336,
+    "sha256": "0ebccbe4361a1b194e6b4f8059c8e006338e9e79b03b312d2bc42a4483a8eaee",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_12_revised52_consensus_cv5_fold_01/model_best.pth.tar",
+    "size_bytes": 474996336,
+    "sha256": "381248ebe1944e00e5d461adb32d903a95293f1324ec6b61157ba0283e88601f",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_12_revised52_consensus_cv5_fold_02/model_best.pth.tar",
+    "size_bytes": 474996336,
+    "sha256": "d4fc736c8c110e69f5949433e0f92f2990b9c577634c3cfaf2fac966707c22dc",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_12_revised52_consensus_cv5_fold_03/model_best.pth.tar",
+    "size_bytes": 474996336,
+    "sha256": "04ead3197c830d51479c1921c8c1492b3b98171e903d7cfab0fe53147c6d2863",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_12_revised52_consensus_cv5_fold_04/model_best.pth.tar",
+    "size_bytes": 474996336,
+    "sha256": "ba675646b4b2d00428a299a22956ca04cd09f21e5d07a4cb4cffabcbc9adaf6e",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_13_revised52_currentraw_baseline_cv5_fold_00/model_best.pth.tar",
+    "size_bytes": 475502639,
+    "sha256": "ef28ad586554b7db19f1455389e302d1d3ec019703474de520d85a234839c0dd",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_13_revised52_currentraw_baseline_cv5_fold_01/model_best.pth.tar",
+    "size_bytes": 475502639,
+    "sha256": "e0ad86cce939bf95044ab23a448ab40307d3651c4a14e920fce747e603d414bd",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_13_revised52_currentraw_baseline_cv5_fold_02/model_best.pth.tar",
+    "size_bytes": 475502639,
+    "sha256": "23192ee6d80c91715cff875eca6f143315ed0dddb6d7d749c6d463308a7c2425",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_13_revised52_currentraw_baseline_cv5_fold_03/model_best.pth.tar",
+    "size_bytes": 475502639,
+    "sha256": "dd4411d2cc09854f87de72e939389f5b17ac238a8450ef6fb2e8158a58237220",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_13_revised52_currentraw_baseline_cv5_fold_04/model_best.pth.tar",
+    "size_bytes": 475502639,
+    "sha256": "ee03ab1a4f5a42899f975e42dfb97e39aee5afab8594ee131e543186f85afbbc",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_5_final200_5090_retrain/model_best.pth.tar",
+    "size_bytes": 475507774,
+    "sha256": "cc0adf15f3051aa13413224b57da6c09c3d4a8adf314112d3005e5337b536e2d",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_5_final200_5090_tversky/model_best.pth.tar",
+    "size_bytes": 475507774,
+    "sha256": "6e399a58cdd924f3852b0b195f19fabee4e68a3e200796506d57b068e8d4ebee",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_6_metassl_labeled/model_best.pth.tar",
+    "size_bytes": 475507774,
+    "sha256": "c62af2cd97305e8524283fd70f1d3a255135f41ec4c0e7beca7304c12131ee83",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_8_metassl_mt_semi/model_best.pth.tar",
+    "size_bytes": 475507774,
+    "sha256": "ce44e3d86eb70461c456fadd80265d0ebad102508e9d18252479a8aec522b172",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_9_doctor_revision_cv5_fold_00/model_best.pth.tar",
+    "size_bytes": 475502639,
+    "sha256": "8cf26cec9238629fb5f097b69b4aaa1a7e483177dde451c2ba31b1ae28be5fa8",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_9_doctor_revision_cv5_fold_01/model_best.pth.tar",
+    "size_bytes": 475502639,
+    "sha256": "05c51251fc8a879f196fd76e1bd92ca26ee34c7c5a7353b14a04ebe80d251b9a",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_9_doctor_revision_cv5_fold_02/model_best.pth.tar",
+    "size_bytes": 475502639,
+    "sha256": "22bca44fa95678540f00b2ea9a38fa59df2cf2d1cd9e4c39dc85e726755b8208",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_9_doctor_revision_cv5_fold_03/model_best.pth.tar",
+    "size_bytes": 475502639,
+    "sha256": "a7c48335a8f186146bd42162033387b69133b60797ffc8c7823e0fddbf3ed0e9",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_9_doctor_revision_cv5_fold_04/model_best.pth.tar",
+    "size_bytes": 475502639,
+    "sha256": "9a3d102956b3214ce1c0e7efa4b2f34a9df14833cb0d4569a7454d99daea6daf",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_mito_v0_9_doctor_revision_cv5_smoke/model_best.pth.tar",
+    "size_bytes": 475507774,
+    "sha256": "05f446ab1ac0d1b750bedf4f22abe8694905c52bd9ab045f26856b755dbc3d27",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_sarcomere_v0_5_final200_5090_focaldice/model_best.pth.tar",
+    "size_bytes": 475507774,
+    "sha256": "873f11d9243ec2bb51b5506d5560899e7b91111aa330b1d950ad4115c9f1ee7c",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_sarcomere_v0_5_final200_5090_retrain/model_best.pth.tar",
+    "size_bytes": 475507774,
+    "sha256": "f3fa2481b3190abc02f49fd84f0690efdf98a8978eeea3b9cb6756e74a8b51f2",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_sarcomere_v0_5_final200_5090_tversky/model_best.pth.tar",
+    "size_bytes": 475507774,
+    "sha256": "1ea0e9006b247453dad760e27b6f5a8efe876363032954af62874eca2b52de5a",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_sarcomere_v0_5_newdata/model_best.pth.tar",
+    "size_bytes": 475507353,
+    "sha256": "02a9d7621fecab54f5f8331b95d642eec571dc0786bcc1f66e468240b34038a1",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_sarcomere_v0_6_dilate_t_prior/model_best.pth.tar",
+    "size_bytes": 475507353,
+    "sha256": "9a457ada0fcbc6f0d7df5a4862aad20a366b4987277abda4beddeb3018c0dc12",
+    "url": null
+  },
+  {
+    "path": "run/jijie/jijie_sarcomere_v0_6_zm_side_dilate_only/model_best.pth.tar",
+    "size_bytes": 475507353,
+    "sha256": "1b8cf60f95677a25de391c4b0ef432db70f76a80d0cf98a5f64d09f43cba65b7",
+    "url": null
+  },
+  {
+    "path": "run/jijie/smoke_mito_v0_8_metassl_mt_semi/model_best.pth.tar",
+    "size_bytes": 475507774,
+    "sha256": "b0d5062c73e451a92b7e73e6923a0848cbcd0d4637c286858b2c3010f7a3cdb7",
+    "url": null
+  },
+  {
+    "path": "run/jijie/mito_texture_classifier.pkl",
+    "size_bytes": 2706422,
+    "sha256": "e34eb63a07351192f9018a533dea3b2782b5117adca53b3cf42ec58e40fd4593",
+    "url": null
+  }
+]

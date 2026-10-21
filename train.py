@@ -1,4 +1,5 @@
 import argparse
+import copy
 import os
 import random
 import sys
@@ -8,6 +9,7 @@ from contextlib import contextmanager
 import numpy as np
 import torch
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from dataloaders import make_data_loader
@@ -19,7 +21,7 @@ from utils.calculate_weights import calculate_weigths_labels
 from utils.checkpoint import load_checkpoint, state_dict_from_model
 from utils.jijie import apply_json_config_overrides, finalize_jijie_args, summarize_jijie_run
 from utils.jijie.quantify import quantify_task_prediction
-from utils.loss import MetaSSLLabeledLoss, SegmentationLosses
+from utils.loss import MetaSSLLabeledLoss, MetaSSLUnlabeledLoss, SegmentationLosses
 from utils.lr_scheduler import LR_Scheduler
 from utils.metrics import Evaluator
 from utils.saver import Saver
@@ -88,6 +90,8 @@ class Trainer(object):
 
         loader_kwargs = {"num_workers": args.workers, "pin_memory": args.cuda}
         self.train_loader, self.val_loader, self.test_loader, self.nclass = make_data_loader(args, **loader_kwargs)
+        self.metassl_unlabeled_loader = self._build_metassl_unlabeled_loader(loader_kwargs)
+        self.metassl_unlabeled_iter = None
         self.has_validation = len(self.val_loader.dataset) > 0
         if not self.has_validation and not args.no_val:
             print("[Run] validation split is empty; switching to no-val mode for this run.")
@@ -100,6 +104,14 @@ class Trainer(object):
             sync_bn=args.sync_bn,
             freeze_bn=args.freeze_bn,
         )
+        self.metassl_reference_mode = getattr(args, "metassl_reference_mode", "rdrop")
+        self.ema_model = None
+        if self.metassl_reference_mode == "ema" and (
+            getattr(args, "enable_metassl_labeled", False) or getattr(args, "enable_metassl_unlabeled", False)
+        ):
+            self.ema_model = copy.deepcopy(model)
+            for param in self.ema_model.parameters():
+                param.detach_()
 
         train_params = [
             {"params": model.get_1x_lr_params(), "lr": args.lr},
@@ -139,6 +151,19 @@ class Trainer(object):
                 min_region_weight=args.metassl_min_region_weight,
                 protect_positive_labels=args.metassl_protect_positive_labels,
                 positive_label_min_weight=args.metassl_positive_label_min_weight,
+                dice_weight=args.metassl_labeled_dice_weight,
+            )
+        self.metassl_unlabeled_criterion = None
+        if getattr(args, "enable_metassl_unlabeled", False):
+            self.metassl_unlabeled_criterion = MetaSSLUnlabeledLoss(
+                num_classes=model.nclass if hasattr(model, "nclass") else self.nclass,
+                beta=args.metassl_beta,
+                delta_u=args.metassl_delta_u,
+                ema_alpha=args.metassl_ema_alpha,
+                initial_threshold=args.metassl_initial_threshold,
+                min_threshold=args.metassl_min_threshold,
+                max_threshold=args.metassl_max_threshold,
+                min_region_weight=args.metassl_unlabeled_min_region_weight,
             )
         self.model = model
         self.optimizer = optimizer
@@ -149,6 +174,10 @@ class Trainer(object):
             self.model = torch.nn.DataParallel(self.model, device_ids=self.args.gpu_ids)
             patch_replication_callback(self.model)
             self.model = self.model.cuda()
+            if self.ema_model is not None:
+                self.ema_model = torch.nn.DataParallel(self.ema_model, device_ids=self.args.gpu_ids)
+                patch_replication_callback(self.ema_model)
+                self.ema_model = self.ema_model.cuda()
 
         self.best_pred = -1.0
         if args.resume is not None:
@@ -164,8 +193,50 @@ class Trainer(object):
             self.best_pred = checkpoint.get("best_pred", checkpoint.get("selection_score", -1.0))
             print("[Checkpoint] loaded '{}' (epoch {})".format(args.resume, args.start_epoch))
 
+        if self.ema_model is not None:
+            self.ema_model.load_state_dict(self.model.state_dict())
+            self.ema_model.eval()
+
         if args.ft:
             args.start_epoch = 0
+            # A held-out revision fold has a different metric scale from the
+            # source run.  Always let its first validation epoch compete.
+            self.best_pred = -1.0
+
+    def _build_metassl_unlabeled_loader(self, loader_kwargs):
+        if not getattr(self.args, "enable_metassl_unlabeled", False):
+            return None
+        if self.args.dataset != "jijie":
+            raise NotImplementedError("MetaSSL unlabeled loader is currently implemented for jijie only.")
+
+        split_value = getattr(self.args, "metassl_unlabeled_splits", None)
+        if not split_value:
+            raise ValueError("--enable-metassl-unlabeled requires --metassl-unlabeled-splits")
+        splits = [item.strip() for item in str(split_value).split(",") if item.strip()]
+        if not splits:
+            raise ValueError("metassl_unlabeled_splits is empty")
+
+        from dataloaders.datasets.jijie import JijieSegmentation
+
+        unlabeled_args = copy.copy(self.args)
+        manifest_dir = getattr(self.args, "metassl_unlabeled_manifest_dir", None)
+        if manifest_dir:
+            unlabeled_args.manifest_dir = manifest_dir
+
+        unlabeled_set = JijieSegmentation(unlabeled_args, split=splits)
+        batch_size = int(getattr(self.args, "metassl_unlabeled_batch_size", 0) or self.args.batch_size)
+        if batch_size <= 0:
+            batch_size = self.args.batch_size
+        drop_last = len(unlabeled_set) >= batch_size
+        print(
+            "[MetaSSL] unlabeled loader=on splits={} samples={} batch={} drop_last={}".format(
+                ",".join(splits),
+                len(unlabeled_set),
+                batch_size,
+                drop_last,
+            )
+        )
+        return DataLoader(unlabeled_set, batch_size=batch_size, shuffle=True, drop_last=drop_last, **loader_kwargs)
 
     def print_run_overview(self):
         test_samples = len(self.test_loader.dataset) if self.test_loader is not None else 0
@@ -206,15 +277,30 @@ class Trainer(object):
             print("[Run] batch_size=1 detected; BatchNorm layers will be kept in eval mode during training.")
         if getattr(self.args, "enable_metassl_labeled", False):
             print(
-                "[MetaSSL] labeled=on weight={} warmup={} beta={} delta_l={} ema_alpha={} min_region_weight={} protect_positive={} positive_min={}".format(
+                "[MetaSSL] labeled=on weight={} warmup={} beta={} delta_l={} threshold_ema={} dice_weight={} reference={} protect_positive={} positive_min={}".format(
                     self.args.metassl_labeled_weight,
                     self.args.metassl_labeled_warmup_epochs,
                     self.args.metassl_beta,
                     self.args.metassl_delta_l,
                     self.args.metassl_ema_alpha,
-                    self.args.metassl_min_region_weight,
+                    self.args.metassl_labeled_dice_weight,
+                    self.args.metassl_reference_mode,
                     self.args.metassl_protect_positive_labels,
                     self.args.metassl_positive_label_min_weight,
+                )
+            )
+        if getattr(self.args, "enable_metassl_unlabeled", False):
+            unlabeled_samples = (
+                len(self.metassl_unlabeled_loader.dataset) if self.metassl_unlabeled_loader is not None else 0
+            )
+            print(
+                "[MetaSSL] unlabeled=on weight={} warmup={} delta_u={} min_region_weight={} splits={} samples={}".format(
+                    self.args.metassl_unlabeled_weight,
+                    self.args.metassl_unlabeled_warmup_epochs,
+                    self.args.metassl_delta_u,
+                    self.args.metassl_unlabeled_min_region_weight,
+                    self.args.metassl_unlabeled_splits,
+                    unlabeled_samples,
                 )
             )
 
@@ -243,6 +329,48 @@ class Trainer(object):
         if warmup_epochs <= 0:
             return min(1.0, max_weight)
         return min(1.0, max_weight * min(1.0, float(epoch + 1) / float(warmup_epochs)))
+
+    def _metassl_unlabeled_scale(self, epoch):
+        if not getattr(self.args, "enable_metassl_unlabeled", False):
+            return 0.0
+        max_weight = float(getattr(self.args, "metassl_unlabeled_weight", 0.0) or 0.0)
+        if max_weight <= 0:
+            return 0.0
+        warmup_epochs = int(getattr(self.args, "metassl_unlabeled_warmup_epochs", 0) or 0)
+        if warmup_epochs <= 0:
+            return max_weight
+        return max_weight * min(1.0, float(epoch + 1) / float(warmup_epochs))
+
+    def _next_metassl_unlabeled_sample(self):
+        if self.metassl_unlabeled_loader is None:
+            return None
+        if self.metassl_unlabeled_iter is None:
+            self.metassl_unlabeled_iter = iter(self.metassl_unlabeled_loader)
+        try:
+            return next(self.metassl_unlabeled_iter)
+        except StopIteration:
+            self.metassl_unlabeled_iter = iter(self.metassl_unlabeled_loader)
+            return next(self.metassl_unlabeled_iter)
+
+    def _metassl_reference_output(self, image):
+        if self.ema_model is not None:
+            self.ema_model.eval()
+            with torch.no_grad():
+                return self.ema_model(image)
+        with torch.no_grad(), batchnorm_eval_only(self.model):
+            return self.model(image)
+
+    def _update_metassl_ema_model(self, global_step):
+        if self.ema_model is None:
+            return
+        decay = float(getattr(self.args, "metassl_ema_teacher_decay", 0.99))
+        alpha = min(1.0 - 1.0 / float(global_step + 1), decay)
+        with torch.no_grad():
+            for ema_param, param in zip(self.ema_model.parameters(), self.model.parameters()):
+                ema_param.data.mul_(alpha).add_(param.data, alpha=1.0 - alpha)
+            for ema_buffer, buffer in zip(self.ema_model.buffers(), self.model.buffers()):
+                ema_buffer.copy_(buffer)
+        self.ema_model.eval()
 
     def _auxiliary_prior_loss(
         self,
@@ -324,39 +452,93 @@ class Trainer(object):
 
         for i, sample in enumerate(tbar):
             image, target = sample["image"], sample["label"]
+            supervision_weight = sample.get("supervision_weight")
             if self.args.cuda:
                 image = image.cuda(non_blocking=True)
                 target = target.cuda(non_blocking=True)
+                if supervision_weight is not None:
+                    supervision_weight = supervision_weight.cuda(non_blocking=True)
 
             self.scheduler(self.optimizer, i, epoch, max(0.0, self.best_pred))
             self.optimizer.zero_grad()
             output = self.model(image)
-            base_seg_loss = self.criterion(output, target)
-            seg_loss = base_seg_loss
+            base_seg_loss = self.criterion(output, target, pixel_weight=supervision_weight)
+            metassl_labeled_loss = output.new_tensor(0.0)
             metassl_stats = None
             metassl_blend = self._metassl_labeled_blend(epoch)
             if self.metassl_labeled_criterion is not None and metassl_blend > 0:
-                with torch.no_grad(), batchnorm_eval_only(self.model):
-                    ref_output = self.model(image)
-                metassl_loss, metassl_stats = self.metassl_labeled_criterion(output, ref_output, target)
-                seg_loss = (1.0 - metassl_blend) * base_seg_loss + metassl_blend * metassl_loss
+                ref_output = self._metassl_reference_output(image)
+                metassl_labeled_loss, metassl_stats = self.metassl_labeled_criterion(output, ref_output, target)
+
+            metassl_unlabeled_scale = self._metassl_unlabeled_scale(epoch)
             t_tubule_prior_loss = self._t_tubule_prior_loss(output, sample, epoch)
             side_tubule_prior_loss = self._side_tubule_prior_loss(output, sample, epoch)
             prior_loss = t_tubule_prior_loss + side_tubule_prior_loss
-            loss = seg_loss + prior_loss
-            loss.backward()
-            self.optimizer.step()
+            supervised_loss = (
+                base_seg_loss
+                + metassl_blend * metassl_labeled_loss
+                + prior_loss
+            )
+            global_step = i + num_batches * epoch
+            output_for_visualization = output.detach() if i % vis_interval == 0 else None
+            supervised_loss_value = float(supervised_loss.detach().cpu())
+            base_seg_loss_value = float(base_seg_loss.detach().cpu())
+            metassl_labeled_loss_value = float(metassl_labeled_loss.detach().cpu())
+            t_tubule_prior_loss_value = float(t_tubule_prior_loss.detach().cpu())
+            side_tubule_prior_loss_value = float(side_tubule_prior_loss.detach().cpu())
 
-            train_loss += loss.item()
+            supervised_loss.backward()
+
+            metassl_unlabeled_loss = image.new_tensor(0.0)
+            metassl_unlabeled_loss_value = 0.0
+            metassl_unlabeled_stats = None
+            if (
+                self.metassl_unlabeled_criterion is not None
+                and self.metassl_unlabeled_loader is not None
+                and metassl_unlabeled_scale > 0
+            ):
+                unlabeled_sample = self._next_metassl_unlabeled_sample()
+                unlabeled_image = unlabeled_sample["image"]
+                if self.args.cuda:
+                    unlabeled_image = unlabeled_image.cuda(non_blocking=True)
+                with batchnorm_eval_only(self.model):
+                    unlabeled_output_1 = self.model(unlabeled_image)
+                    if self.ema_model is not None:
+                        unlabeled_ref_output = self._metassl_reference_output(unlabeled_image)
+                        metassl_unlabeled_loss, metassl_unlabeled_stats = self.metassl_unlabeled_criterion(
+                            unlabeled_output_1,
+                            unlabeled_ref_output,
+                        )
+                    else:
+                        unlabeled_output_2 = self.model(unlabeled_image)
+                        unlabeled_loss_12, stats_12 = self.metassl_unlabeled_criterion(
+                            unlabeled_output_1,
+                            unlabeled_output_2,
+                        )
+                        unlabeled_loss_21, stats_21 = self.metassl_unlabeled_criterion(
+                            unlabeled_output_2,
+                            unlabeled_output_1,
+                        )
+                        metassl_unlabeled_loss = 0.5 * (unlabeled_loss_12 + unlabeled_loss_21)
+                        metassl_unlabeled_stats = aggregate_numeric_dicts([stats_12, stats_21])
+                scaled_unlabeled_loss = metassl_unlabeled_scale * metassl_unlabeled_loss
+                metassl_unlabeled_loss_value = float(metassl_unlabeled_loss.detach().cpu())
+                scaled_unlabeled_loss.backward()
+
+            self.optimizer.step()
+            self._update_metassl_ema_model(global_step + 1)
+
+            total_loss_value = supervised_loss_value + metassl_unlabeled_scale * metassl_unlabeled_loss_value
+            train_loss += total_loss_value
             average_loss = train_loss / (i + 1)
             current_lr = self.optimizer.param_groups[0]["lr"]
             if self.show_progress:
                 tbar.set_postfix(loss="{:.4f}".format(average_loss), lr="{:.6f}".format(current_lr), refresh=False)
 
-            global_step = i + num_batches * epoch
-            self.writer.add_scalar("train/total_loss_iter", loss.item(), global_step)
+            self.writer.add_scalar("train/total_loss_iter", total_loss_value, global_step)
             if metassl_stats is not None:
-                self.writer.add_scalar("train/base_seg_loss_iter", base_seg_loss.item(), global_step)
+                self.writer.add_scalar("train/base_seg_loss_iter", base_seg_loss_value, global_step)
+                self.writer.add_scalar("train/metassl_labeled_loss_iter", metassl_labeled_loss_value, global_step)
                 self.writer.add_scalar("train/metassl_blend_iter", metassl_blend, global_step)
                 self.writer.add_scalar("train/metassl_threshold_mean_iter", metassl_stats["metassl_threshold_mean"], global_step)
                 self.writer.add_scalar("train/metassl_uc_fraction_iter", metassl_stats["metassl_uc_fraction"], global_step)
@@ -366,13 +548,31 @@ class Trainer(object):
                     metassl_stats["metassl_positive_disagreement_fraction"],
                     global_step,
                 )
-            if t_tubule_prior_loss.item() > 0:
-                self.writer.add_scalar("train/t_tubule_prior_loss_iter", t_tubule_prior_loss.item(), global_step)
-            if side_tubule_prior_loss.item() > 0:
-                self.writer.add_scalar("train/side_tubule_prior_loss_iter", side_tubule_prior_loss.item(), global_step)
+            if metassl_unlabeled_stats is not None:
+                self.writer.add_scalar("train/metassl_unlabeled_scale_iter", metassl_unlabeled_scale, global_step)
+                self.writer.add_scalar("train/metassl_unlabeled_loss_iter", metassl_unlabeled_loss_value, global_step)
+                self.writer.add_scalar(
+                    "train/metassl_unlabeled_threshold_mean_iter",
+                    metassl_unlabeled_stats["metassl_unlabeled_threshold_mean"],
+                    global_step,
+                )
+                self.writer.add_scalar(
+                    "train/metassl_unlabeled_uc_fraction_iter",
+                    metassl_unlabeled_stats["metassl_unlabeled_uc_fraction"],
+                    global_step,
+                )
+                self.writer.add_scalar(
+                    "train/metassl_unlabeled_dc_fraction_iter",
+                    metassl_unlabeled_stats["metassl_unlabeled_dc_fraction"],
+                    global_step,
+                )
+            if t_tubule_prior_loss_value > 0:
+                self.writer.add_scalar("train/t_tubule_prior_loss_iter", t_tubule_prior_loss_value, global_step)
+            if side_tubule_prior_loss_value > 0:
+                self.writer.add_scalar("train/side_tubule_prior_loss_iter", side_tubule_prior_loss_value, global_step)
 
-            if i % vis_interval == 0:
-                self.summary.visualize_image(self.writer, self.args.dataset, image, target, output, global_step)
+            if output_for_visualization is not None:
+                self.summary.visualize_image(self.writer, self.args.dataset, image, target, output_for_visualization, global_step)
 
         average_train_loss = train_loss / max(1, num_batches)
         self.writer.add_scalar("train/total_loss_epoch", average_train_loss, epoch)
@@ -454,7 +654,11 @@ class Trainer(object):
             target_np = target.detach().cpu().numpy()
             self.evaluator.add_batch(target_np, pred)
 
-            if self.args.dataset == "jijie" and getattr(self.args, "quantify_class_ids", None):
+            if (
+                self.args.dataset == "jijie"
+                and getattr(self.args, "quantify_class_ids", None)
+                and not getattr(self.args, "partial_label_supervision", False)
+            ):
                 batch_size = pred.shape[0]
                 for batch_index in range(batch_size):
                     sample_id = sample.get("sample_id", ["sample"])[batch_index]
@@ -565,7 +769,10 @@ def build_parser():
         help="dataset name",
     )
     parser.add_argument("--task-name", type=str, default=None, help="logical jijie task name, e.g. mito / mito_sr / sarcomere")
+    parser.add_argument("--data-root", type=str, default=None, help="optional prepared Jijie dataset root; leaves data/jijie untouched")
     parser.add_argument("--manifest-dir", type=str, default=None, help="directory that contains train.txt / val.txt / test.txt manifests")
+    parser.add_argument("--train-mask-dir", type=str, default=None, help="optional mask directory used only by the training split")
+    parser.add_argument("--eval-mask-dir", type=str, default=None, help="optional mask directory used only by validation and test splits")
     parser.add_argument("--use-sbd", action="store_true", default=True, help="use SBD dataset for Pascal")
     parser.add_argument("--workers", type=int, default=4, metavar="N", help="dataloader threads")
     parser.add_argument("--base-size", type=int, default=512, help="base image size")
@@ -593,6 +800,13 @@ def build_parser():
     parser.add_argument("--t-tubule-prior-exclude-non-background", type=bool, default=True, help="avoid adding prior pixels over non-background non-target labels")
     parser.add_argument("--train-vertical-flip", action="store_true", default=False, help="enable random vertical flip in training")
     parser.add_argument("--train-rotate-degree", type=float, default=0.0, help="small-angle random rotation for training")
+    parser.add_argument("--train-focus-valid-labels", action="store_true", default=False, help="center partial-label crops on non-ignore supervision")
+    parser.add_argument("--partial-label-ignore-index", type=int, default=255, help="mask value ignored by partial-label supervision")
+    parser.add_argument("--partial-label-supervision", action="store_true", default=False, help="skip object-level GT quantification for masks with ignored unreviewed pixels")
+    parser.add_argument("--use-supervision-weights", action="store_true", default=False, help="read per-pixel provenance weights from SupervisionWeight alongside masks")
+    parser.add_argument("--supervision-weight-dir", type=str, default="SupervisionWeight", help="relative directory under data_root containing supervision-weight PNGs")
+    parser.add_argument("--train-supervision-weight-dir", type=str, default=None, help="optional supervision-weight directory used only by the training split")
+    parser.add_argument("--eval-supervision-weight-dir", type=str, default=None, help="optional supervision-weight directory used only by validation and test splits")
     parser.add_argument("--sync-bn", type=bool, default=None, help="whether to use sync batch norm")
     parser.add_argument("--freeze-bn", type=bool, default=False, help="freeze batch norm parameters")
     parser.add_argument(
@@ -625,9 +839,12 @@ def build_parser():
     parser.add_argument("--eval-interval", type=int, default=1, help="validation interval")
     parser.add_argument("--no-val", action="store_true", default=False, help="skip validation")
     parser.add_argument("--no-progress", action="store_true", default=False, help="disable tqdm progress bars")
-    parser.add_argument("--enable-metassl-labeled", action="store_true", default=False, help="enable labeled-image MetaSSL heterogeneous CE+Dice loss")
-    parser.add_argument("--metassl-labeled-weight", type=float, default=1.0, help="maximum blend ratio for MetaSSL labeled loss")
-    parser.add_argument("--metassl-labeled-warmup-epochs", type=int, default=20, help="epochs used to ramp MetaSSL labeled loss")
+    parser.add_argument("--enable-metassl-labeled", action="store_true", default=False, help="enable labeled-image MetaSSL heterogeneous auxiliary loss")
+    parser.add_argument("--metassl-reference-mode", type=str, default="rdrop", choices=["rdrop", "ema"], help="reference prediction source for MetaSSL")
+    parser.add_argument("--metassl-ema-teacher-decay", type=float, default=0.99, help="EMA decay when --metassl-reference-mode=ema")
+    parser.add_argument("--metassl-labeled-weight", type=float, default=1.0, help="maximum auxiliary weight for labeled MetaSSL loss")
+    parser.add_argument("--metassl-labeled-warmup-epochs", type=int, default=20, help="epochs used to ramp labeled MetaSSL loss")
+    parser.add_argument("--metassl-labeled-dice-weight", type=float, default=0.0, help="optional weighted Dice term inside labeled MetaSSL auxiliary loss")
     parser.add_argument("--metassl-beta", type=float, default=3.0, help="generalized Gaussian beta for MetaSSL region weights")
     parser.add_argument("--metassl-delta-l", type=float, default=0.6, help="labeled-image interval delta_l for MetaSSL region weights")
     parser.add_argument("--metassl-ema-alpha", type=float, default=0.99, help="EMA alpha for adaptive MetaSSL confidence threshold")
@@ -637,6 +854,14 @@ def build_parser():
     parser.add_argument("--metassl-min-region-weight", type=float, default=0.05, help="minimum spatial weight assigned by MetaSSL")
     parser.add_argument("--metassl-protect-positive-labels", action="store_true", default=False, help="avoid heavily down-weighting manually labeled positive pixels")
     parser.add_argument("--metassl-positive-label-min-weight", type=float, default=0.8, help="minimum weight for positive-label pixels when predictions disagree")
+    parser.add_argument("--enable-metassl-unlabeled", action="store_true", default=False, help="enable unlabeled-image MetaSSL pseudo-label loss")
+    parser.add_argument("--metassl-unlabeled-splits", type=str, default=None, help="comma-separated jijie split names used as unlabeled data")
+    parser.add_argument("--metassl-unlabeled-manifest-dir", type=str, default=None, help="optional manifest dir for unlabeled split files")
+    parser.add_argument("--metassl-unlabeled-batch-size", type=int, default=None, help="batch size for unlabeled MetaSSL images")
+    parser.add_argument("--metassl-unlabeled-weight", type=float, default=0.0, help="lambda weight for unlabeled MetaSSL loss")
+    parser.add_argument("--metassl-unlabeled-warmup-epochs", type=int, default=20, help="epochs used to ramp unlabeled MetaSSL loss")
+    parser.add_argument("--metassl-delta-u", type=float, default=0.3, help="unlabeled-image interval delta_u for MetaSSL region weights")
+    parser.add_argument("--metassl-unlabeled-min-region-weight", type=float, default=0.0, help="minimum spatial weight for unlabeled MetaSSL regions")
     return parser
 
 

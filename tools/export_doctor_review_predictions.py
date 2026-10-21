@@ -3,6 +3,7 @@ import csv
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -10,10 +11,14 @@ import torch
 from PIL import Image
 from torchvision import transforms
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from dataloaders import custom_transforms as tr
 from evaluate import build_parser, parse_int_list
 from modeling.deeplab import DeepLab
-from utils.checkpoint import load_checkpoint, state_dict_from_model
+from utils.checkpoint import load_checkpoint
 from utils.jijie import apply_json_config_overrides, finalize_jijie_args
 from utils.jijie.inference import predict_logits
 from utils.jijie.postprocess import DEFAULT_CLASSIFIER_PATH, postprocess_mito_mask
@@ -116,8 +121,7 @@ def load_model(args, nclass):
     )
     if args.cuda:
         model = model.cuda()
-    checkpoint = load_checkpoint(args.resume, map_location="cuda" if args.cuda else "cpu")
-    model.load_state_dict(state_dict_from_model(checkpoint["state_dict"]))
+    load_checkpoint(args.resume, model, map_location="cuda" if args.cuda else "cpu")
     model.eval()
     return model
 
@@ -138,6 +142,7 @@ def export_task(
     output_root,
     splits,
     all_images,
+    max_samples=None,
     postprocess_mito=False,
     postprocess_classifier=None,
 ):
@@ -161,6 +166,8 @@ def export_task(
         ids = sorted(path.stem for path in (data_root / "JPEGImages").glob("*.jpg"))
     else:
         ids = collect_task_ids(manifest_dir, splits)
+    if max_samples is not None and max_samples > 0:
+        ids = ids[: int(max_samples)]
     if not ids:
         raise RuntimeError(f"No image ids found for task {task_name}")
 
@@ -262,6 +269,7 @@ def main():
     parser.add_argument("--output-root", type=Path, default=Path("outputs/doctor_review_predictions_mito_mito_sr"))
     parser.add_argument("--splits", type=str, default="train,val,test")
     parser.add_argument("--all-images", action="store_true", help="export every JPEGImages/*.jpg instead of task final_200 split ids")
+    parser.add_argument("--max-samples", type=int, default=None, help="optional limit for smoke testing")
     parser.add_argument("--mito-config", type=Path, default=Path("configs/mito/mito_v0_5_final200.json"))
     parser.add_argument("--mito-resume", type=Path, default=Path("run/jijie/jijie_mito_v0_5_final200/model_best.pth.tar"))
     parser.add_argument("--mito-sr-config", type=Path, default=Path("configs/mito_sr/mito_sr_v0_5_final200.json"))
@@ -282,12 +290,22 @@ def main():
             output_root,
             splits,
             args.all_images,
+            max_samples=args.max_samples,
             postprocess_mito=args.postprocess_mito,
             postprocess_classifier=args.postprocess_classifier,
         )
     )
     summaries.append(
-        export_task("mito_sr", args.mito_sr_config, args.mito_sr_resume, args.data_root, output_root, splits, args.all_images)
+        export_task(
+            "mito_sr",
+            args.mito_sr_config,
+            args.mito_sr_resume,
+            args.data_root,
+            output_root,
+            splits,
+            args.all_images,
+            max_samples=args.max_samples,
+        )
     )
     (output_root / "summary.json").write_text(json.dumps(summaries, ensure_ascii=False, indent=2), encoding="utf-8")
     print("Export finished:", output_root)
