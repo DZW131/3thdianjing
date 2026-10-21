@@ -71,6 +71,8 @@ python tools/build_jijie_task_manifests.py --help
 
 [权重清单](docs/weights_inventory.json)包含40个文件的相对路径、大小、SHA-256及URL。URL为空表示未发布。下载工具校验大小及哈希，不覆盖不一致文件。
 
+**当前仅纹理分类器已发布到[Release](https://github.com/DZW131/3thdianjing/releases/tag/handoff-weights-20261021)，三个基线及其他实验checkpoint尚未公开上传。** 大文件传输缓慢，本次中止上传；以下基线命令须另加授权的`--ssh USER@HOST --remote-root /path/to/project`才能下载，否则会明确报错。
+
 ```bash
 python tools/fetch_weights.py --list
 python tools/fetch_weights.py --path run/jijie/jijie_mito_v0_5_final200_5090_retrain/model_best.pth.tar
