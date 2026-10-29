@@ -1,0 +1,17 @@
+﻿development_id,source,objects,candidate_pairs,direction_pass_count,bundle_geometry_pass_count,texture_supported,texture_conflict,uncertain_texture
+dev00,annotation,100,43,17,16,5,0,38
+dev00,prediction,56,35,26,23,8,1,26
+dev01,annotation,19,11,7,7,0,0,11
+dev01,prediction,32,18,9,8,1,0,17
+dev02,annotation,5,0,0,0,0,0,0
+dev02,prediction,18,7,0,0,1,0,6
+dev03,annotation,54,23,12,11,7,1,15
+dev03,prediction,31,16,11,8,3,1,12
+dev04,annotation,67,37,24,22,9,0,28
+dev04,prediction,62,40,30,28,9,1,30
+dev05,annotation,113,46,21,15,12,0,34
+dev05,prediction,73,47,34,28,22,1,24
+dev06,annotation,38,22,8,7,1,0,21
+dev06,prediction,35,18,7,7,0,0,18
+dev07,annotation,48,29,19,17,19,0,10
+dev07,prediction,43,28,24,21,16,0,12

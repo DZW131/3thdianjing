@@ -4,6 +4,8 @@
 
 交接分支：`codex/reproducible-handoff-20261020`。未替换主模型。原始数据、患者标识、数据库、样本划分需由项目负责人授权提供，不随公开代码发布。
 
+2026-10-22新增肌节结构研究：[实验记录与8例统计](docs/SARCOMERE_PROGRESS_20261022.md)、[SarcGraph接入与复现](docs/SARCGRAPH_INTEGRATION.md)。已实现候选Z-Z像素距离、方向/重叠检查和原图纹理证据；可靠的微米肌节长度及alpha角仍待结构审核与尺度校准。
+
 ## 安装与快速检查
 
 以下在仓库根目录Linux Bash运行。已工作的服务器环境为Python3.10、RTX5090、torch2.11.0+cu128、torchvision0.26.0+cu128，不是旧4090的cu121环境。

@@ -1,0 +1,19 @@
+{
+  "python": "3.13.5",
+  "packages": {
+    "numpy": "2.2.6",
+    "pandas": "2.3.1",
+    "scipy": "1.16.1",
+    "scikit-image": "0.26.0",
+    "matplotlib": "3.10.5",
+    "networkx": "3.1",
+    "trackpy": "0.7",
+    "sk-video": "1.1.10"
+  },
+  "source_sha256": {
+    "report_sarcgraph_development.py": "587f47146c42b0ab66fc6ff85a57ad897863127124b9d4538b54301633a1e5b9",
+    "sarcgraph_normal_neighbors.py": "5dec2545b74849f13432707503f4bf2d03f1cfaf7c7f597e7e9bc7378aafe71c",
+    "sarcgraph_texture.py": "3c91464e623d880e93b5d55a0fd83a1a6a05a705858bd9a30f3f0c8259849a8e",
+    "sarcgraph_geometry.py": "2da857bb9e133a7511a489d9b0900f11b03eb4977f9e2adbb07433763bc71244"
+  }
+}

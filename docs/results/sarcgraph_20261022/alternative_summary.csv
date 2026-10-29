@@ -1,0 +1,9 @@
+﻿development_id,original_pairs,original_geometry_pass,normal_proposals,normal_selected,new_selected,selected_texture_supported,selected_texture_conflict,selected_texture_uncertain
+dev00,35,23,43,21,4,6,0,15
+dev01,18,8,16,10,2,2,0,8
+dev02,7,0,0,0,0,0,0,0
+dev03,16,8,26,7,1,1,0,6
+dev04,40,28,67,31,7,9,0,22
+dev05,47,28,46,35,9,18,0,17
+dev06,18,7,13,10,4,0,0,10
+dev07,28,21,39,17,1,10,0,7
