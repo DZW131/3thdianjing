@@ -38,6 +38,7 @@ id_ed25519*
 *.pth
 *.pt
 *.pkl
+*.joblib
 *.npy
 *.npz
 *.docx
