@@ -150,6 +150,28 @@ mask路径从导出manifest取得。DB结构需与平台兼容，先导入1张�
 
 来源：[聚合结果](docs/results/four_way_overall.csv)、[分类别](docs/results/four_way_classes.csv)。仅发布聚合统计，私有原始日志由负责人保管，汇总脚本为`tools/report_mito_four_way.py`。五折均值与合并混淆矩阵宏平均不能混用。当前仍保留原模型＋后处理。
 
+## 肌原纤维区域与 Z 线图融合（2026-11-12 实验，11-16 同步）
+
+本批独立实验不修改原有分割模型。当前推荐方向是**保留原始 SarcGraph 节点和连接，在图的边上加入肌原纤维区域证据**，而不是以绿色四边形替代肌节骨架。
+
+- [区域学习实验](docs/MYOFIBRIL_REGION_LEARNING_20261112.md)：小型三类 U-Net，CellSMB 公开算法输出作为训练目标；肌原纤维空间留出一致性 Dice=0.4703、IoU=0.3074，不是人工金标准准确率。
+- [SarcGraph 区域证据融合](docs/SARCGRAPH_REGION_GRAPH_20261112.md)：dev00/dev05 分别保留全部 35/47 条原始边，附加区域支持信息；8 条有区域支持的额外建议仅供核查，未加入原图。没有验证准确率改善。
+- [局部 Z 路径实验](docs/Z_LOCAL_PATHS_20261112.md)：局部追踪辅助配对。
+- [四边形探索记录](docs/FUSED_SARCOMERE_REGIONS_20261112.md)：保留历史过程，不作为当前完整肌节建模成果。
+
+依赖沿用项目的 PyTorch、numpy、Pillow、pandas、scipy、scikit-image；独立区域网络不需要 TensorFlow。完整实测版本及训练参数见实验说明，不应直接安装误匹配的 Myofibril_paper 权重（其公开模型目标是荧光线粒体）。
+
+```bash
+python -m unittest discover -s tools -p test_myofibril_region_learning.py -v
+python -m unittest discover -s tools -p test_fused_sarcomere_regions.py -v
+python -m unittest discover -s tools -p test_sarcgraph_region_evidence.py -v
+python -m unittest discover -s tools -p test_z_local_streamlines.py -v
+python tools/pilot_myofibril_region_learning.py --help
+python tools/annotate_sarcgraph_with_regions.py --help
+```
+
+实跑命令见各说明。运行依赖此前核对的公共图像/标签、授权私有图像和已导出的 Z 节点/边；这些输入不随代码提交，克隆后不能仅凭源码重现实验。独立区域试验权重和患者图像、概率图、打包产物未上传。旧分割权重获取方式不变。原始 SarcGraph 图来自 `tools/analyze_sarcomere_sarcgraph.py`，并非新增的替代配对图。
+
 ## 已知问题与交接边界
 
 - 未标区域、保留AI对象、选模偏倚、历史checkpoint/纹理分类器潜在训练重叠限制结果解释，不能称临床准确率或严格外部泛化。
