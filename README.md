@@ -29,7 +29,27 @@ python train.py --help
 python evaluate.py --help
 ```
 
-版本来自服务器实际环境，未在空白机器全量重装；[验证记录](docs/HANDOFF.md)。`requirements.txt`为较宽范围，`requirements-5090.txt`为相关包的精确版本。GPU驱动必须支持所选wheel。标尺OCR还需系统Tesseract及英文语言包，如Ubuntu安装`tesseract-ocr tesseract-ocr-eng`。
+版本来自服务器实际环境，未在空白机器全量重装；[验证记录](docs/HANDOFF.md)。`requirements.txt`为较宽范围，`requirements-5090.txt`为相关包的精确版本。GPU驱动必须支持所选wheel。自动标尺OCR使用可选 RapidOCR/ONNX Runtime，安装 `requirements-scale-ocr.txt`；不需要 Tesseract。依赖版本须兼容目标 Python/系统，详见下节。
+
+### 自动标尺读数与微米校准（2026-11-18 补齐交接）
+
+旧 `tools/detect_scale_bars.py` 只测横线，不读数字；现在要求显式 `--scale-bar-um`，仅适合已知所有输入标尺长度相同的情况。**不要把 1 μm 默认值用于不同刻度的图片。**
+
+自动流程入口为 `tools/detect_scale_ocr.py`，核心为 `utils/jijie/scale_ocr.py`：定位标尺，读取邻近数字/单位，在原图及增强图上取得一致读数后计算 `um_per_pixel=scale_bar_um/scale_bar_px`。无法识别或多候选歧义则 `needs_review`，不猜为 1 μm。
+
+```bash
+python -m pip install -r requirements-scale-ocr.txt
+python tools/detect_scale_ocr.py --image-dir /path/to/JPEGImages --output-dir outputs/scale_ocr --numeric-only --limit 5
+python -m unittest discover -s tools -p test_scale_ocr_pipeline.py -v
+```
+
+`--numeric-only` 表示负责人明确保证单位全部为微米，OCR 只读数字，不是自动确认单位；混合 nm/μm 时不可使用。默认模式需识别到微米单位。
+批量入口非递归扫描 JPG/PNG/TIF/JPEG/TIFF，输出 `calibration.csv`、`summary.json` 和 `review/` 检查图。相同样本名冲突会拒绝；多页 TIF 仅处理首帧；输出目录需不存在。
+
+`evaluate.py` 已接入：在原有评估命令后追加 `--auto-scale-ocr --scale-ocr-numeric-only`；或追加 `--scale-calibration-csv outputs/scale_ocr/calibration.csv` 复用同原图尺度的逐图校准表。不要同时用旧 `--auto-scale-bar` 冒充数字识别。显式 `--um-per-pixel` 与校准 CSV 优先于 OCR。
+OCR 路径会检查原图和预测 mask 尺寸，尺寸不匹配则待复核。面积乘比例平方，长度乘比例；失败图继续保留像素单位。逐图导出 OCR 文本、状态、置信度和复核原因。
+
+本次通过 4 项合成/注入OCR输出的测试及语法/CLI检查；本机未安装真实 OCR 推理依赖，没有将本次同步说成真实图片全量复测。历史识别覆盖率不是读数准确率。医院部署仍需真实图人工核对、目标环境依赖验证及误读防护。
 
 ## 目录结构
 

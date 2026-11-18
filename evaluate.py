@@ -163,6 +163,10 @@ class SegmentationEvaluator(object):
         self.model.eval()
         self.evaluator = Evaluator(self.nclass)
         self.scale_calibration = load_scale_calibration(getattr(args, "scale_calibration_csv", None))
+        self.scale_ocr = None
+        if getattr(args, 'auto_scale_ocr', False):
+            from utils.jijie.scale_ocr import ScaleOCR
+            self.scale_ocr = ScaleOCR(numeric_only=getattr(args,'scale_ocr_numeric_only',False))
         if self.scale_calibration:
             print("[ScaleBar] loaded {} calibration rows from {}".format(
                 len(self.scale_calibration.get("rows", [])), args.scale_calibration_csv))
@@ -267,19 +271,24 @@ class SegmentationEvaluator(object):
                         scale_bar_info = None
                         should_resolve_scale = (
                             self.args.auto_scale_bar
+                            or self.args.auto_scale_ocr
                             or self.args.scale_calibration_csv
                             or self.args.um_per_pixel is not None
                         )
                         if should_resolve_scale:
                             gray_for_scale = None
-                            if self.args.auto_scale_bar or self.args.scale_calibration_csv:
+                            if self.args.auto_scale_bar or self.args.auto_scale_ocr or self.args.scale_calibration_csv:
                                 gray_for_scale = self._load_gray_image(sample, batch_index)
                             sample_um_per_pixel, scale_bar_info = resolve_um_per_pixel(
                                 self.args,
                                 gray_image=gray_for_scale,
                                 sample_id=sample_id,
                                 calibration=self.scale_calibration,
+                                ocr=self.scale_ocr,
                             )
+                            if self.args.auto_scale_ocr and gray_for_scale is not None and tuple(np.asarray(gray_for_scale).shape[:2]) != tuple(pred_np[batch_index].shape):
+                                sample_um_per_pixel = None
+                                scale_bar_info = dict(method='scale_ocr',status='needs_review',reason='mask_original_size_mismatch')
                         image_summary, sample_object_rows, sample_detection_rows, sample_class_rows = quantify_task_prediction(
                             task_name=getattr(self.args, "task_name", "jijie"),
                             gt_mask=target_np[batch_index].astype(np.int32),
@@ -291,6 +300,11 @@ class SegmentationEvaluator(object):
                             return_class_rows=True,
                         )
                         if scale_bar_info is not None:
+                            image_summary['scale_status'] = scale_bar_info.get('status', 'provided_calibration')
+                            image_summary['scale_ocr_text'] = scale_bar_info.get('ocr_text', '')
+                            image_summary['scale_ocr_confidence'] = scale_bar_info.get('ocr_confidence')
+                            image_summary['scale_review_reason'] = scale_bar_info.get('reason', '')
+                            image_summary['scale_unit_source'] = scale_bar_info.get('unit_source', '')
                             if scale_bar_info.get("width") is not None:
                                 image_summary["scale_bar_px"] = scale_bar_info.get("width")
                             elif scale_bar_info.get("scale_bar_px") is not None:
@@ -336,12 +350,13 @@ class SegmentationEvaluator(object):
             }
             print("[Postprocess] unified {} instances, refined {} instances across {} images".format(
                 unified_total, refined_total, len(postprocess_stats)))
-        if (self.args.auto_scale_bar or self.args.scale_calibration_csv) and image_rows:
+        if (self.args.auto_scale_bar or self.args.auto_scale_ocr or self.args.scale_calibration_csv) and image_rows:
             scale_rows = [r for r in image_rows if r.get("scale_bar_px") is not None]
             umpp_values = [r.get("um_per_pixel") for r in image_rows if r.get("um_per_pixel") is not None]
             summary["scale_bar"] = {
                 "auto_detected": len(scale_rows),
                 "resolved": len(umpp_values),
+                "needs_review": sum(r.get('scale_status')=='needs_review' for r in image_rows),
                 "total_images": len(image_rows),
                 "calibration_csv": self.args.scale_calibration_csv,
                 "mean_um_per_pixel": float(np.mean(umpp_values)) if umpp_values else None,
@@ -604,6 +619,8 @@ def build_parser():
     parser.add_argument("--save-dir", type=str, default="outputs/eval", help="directory for metrics and figures")
     parser.add_argument("--um-per-pixel", type=float, default=None, help="pixel size used for um and um2 quantification")
     parser.add_argument("--auto-scale-bar", action="store_true", default=False, help="auto-detect scale bar from image and compute um/pixel")
+    parser.add_argument('--auto-scale-ocr', action='store_true', help='read printed micrometer label and bar width; unresolved images keep pixel units')
+    parser.add_argument('--scale-ocr-numeric-only', action='store_true', help='unit explicitly fixed to micrometers; OCR reads numbers only (use with --auto-scale-ocr)')
     parser.add_argument("--scale-bar-um", type=float, default=1.0, help="physical length the scale bar represents in um (default 1.0)")
     parser.add_argument("--scale-calibration-csv", type=str, default=None, help="optional CSV with per-sample or per-group scale calibration")
     parser.add_argument("--postprocess-mito", action="store_true", default=False, help="apply instance unification + texture classifier post-processing to mito task predictions")

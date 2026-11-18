@@ -1,0 +1,3 @@
+# Optional CPU OCR; packaged models enable offline inference after installation.
+rapidocr_onnxruntime==1.4.4
+onnxruntime==1.23.2

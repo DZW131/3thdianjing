@@ -1,16 +1,15 @@
 """Scale bar detection and um/pixel calibration for TEM images.
 
 The detector finds the dark horizontal scale bar in the lower-right corner
-and converts pixel measurements to micrometers. Because OCR of the small
-printed label is unstable on these TEM exports, the robust workflow is:
+and combines pixel measurements with a physical scale. Resolution priority:
 
 1. use an explicit ``um_per_pixel`` if provided;
 2. use a per-sample/per-group calibration CSV if available;
-3. detect bar width and combine it with a known/default bar length.
+3. optional RapidOCR label reading plus bar width;
+4. legacy bar-only detection with a caller-provided/legacy default length.
 
-The default visible scale bar length is 1 um, matching the current jijie TEM
-exports seen in this project. If a subset uses a different label, put that in
-the calibration CSV instead of relying on OCR.
+The legacy 1 um default is NOT valid for mixed labels. OCR failure returns no
+physical calibration, never a fallback 1 um. Review results before clinical use.
 """
 
 import csv
@@ -47,7 +46,7 @@ def _parse_float(value):
         number = float(text)
     except ValueError:
         return None
-    return number if number > 0 else None
+    return number if np.isfinite(number) and number > 0 else None
 
 
 def load_scale_calibration(path):
@@ -75,8 +74,10 @@ def load_scale_calibration(path):
         reader = csv.DictReader(handle)
         for raw_row in reader:
             row = {str(key).strip().lower(): value for key, value in raw_row.items() if key is not None}
+            if row.get('status') and row['status'] not in ('auto_consensus','auto_recovered','manual_verified','verified'):
+                continue
             sample_id = row.get("sample_id") or row.get("image_id") or row.get("id")
-            group_id = row.get("group_id") or row.get("case_id") or sample_group_id(sample_id)
+            group_id = row.get("group_id") or row.get("case_id")
             record = {
                 "sample_id": str(sample_id).strip() if sample_id else None,
                 "group_id": str(group_id).strip() if group_id else None,
@@ -135,8 +136,12 @@ def detect_scale_bar_candidates(
     dark = roi < dark_thresh
     labeled, n = ndimage.label(dark, structure=ndimage.generate_binary_structure(2, 2))
     candidates = []
-    for cid in range(1, int(n) + 1):
-        yy, xx = np.nonzero(labeled == cid)
+    for cid, component_slice in enumerate(ndimage.find_objects(labeled),start=1):
+        if component_slice is None:
+            continue
+        yy, xx = np.nonzero(labeled[component_slice] == cid)
+        yy=yy+component_slice[0].start
+        xx=xx+component_slice[1].start
         if xx.size == 0:
             continue
         bw = int(xx.max() - xx.min() + 1)
@@ -193,7 +198,7 @@ def compute_um_per_pixel(gray_image, scale_bar_um=DEFAULT_SCALE_BAR_UM, **detect
     return um_per_pixel, bar
 
 
-def resolve_um_per_pixel(args, gray_image=None, sample_id=None, calibration=None):
+def resolve_um_per_pixel(args, gray_image=None, sample_id=None, calibration=None, ocr=None):
     """Resolve the effective um_per_pixel for an evaluation sample.
 
     Priority:
@@ -208,7 +213,7 @@ def resolve_um_per_pixel(args, gray_image=None, sample_id=None, calibration=None
         bar_info records how the scale was resolved.
     """
     explicit = getattr(args, "um_per_pixel", None)
-    if explicit is not None and explicit > 0:
+    if explicit is not None and np.isfinite(explicit) and explicit > 0:
         return float(explicit), {"method": "explicit_um_per_pixel", "um_per_pixel": float(explicit)}
 
     record, level = lookup_scale_calibration(calibration, sample_id)
@@ -232,6 +237,14 @@ def resolve_um_per_pixel(args, gray_image=None, sample_id=None, calibration=None
             if bar is not None:
                 bar["method"] = method + "_plus_auto_width"
             return um_per_pixel, bar
+
+    if getattr(args,'auto_scale_ocr',False):
+        if gray_image is None:
+            return None,dict(status='needs_review',method='scale_ocr',reason='original_image_missing')
+        if ocr is None:
+            from .scale_ocr import ScaleOCR
+            ocr=ScaleOCR(numeric_only=getattr(args,'scale_ocr_numeric_only',False))
+        return ocr.resolve(gray_image)
 
     if gray_image is not None and getattr(args, "auto_scale_bar", False):
         scale_bar_um = getattr(args, "scale_bar_um", DEFAULT_SCALE_BAR_UM)

@@ -65,7 +65,8 @@ def main() -> None:
     parser.add_argument("--image-dir", required=True, type=Path)
     parser.add_argument("--split-file", type=Path, default=None)
     parser.add_argument("--output-csv", required=True, type=Path)
-    parser.add_argument("--scale-bar-um", type=float, default=1.0)
+    parser.add_argument("--scale-bar-um", type=float, required=True,
+                        help="known physical bar length for ALL inputs; no OCR; use detect_scale_ocr.py for mixed labels")
     parser.add_argument("--review-dir", type=Path, default=None, help="optional directory for lower-right review crops")
     parser.add_argument("--max-review", type=int, default=200)
     args = parser.parse_args()
